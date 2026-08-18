@@ -25,21 +25,17 @@ fn get_project_bin() -> io::Result<String> {
     }
 }
 
-fn print_envrc(project_path: &str, project_name: &str) -> io::Result<()> {
-    let date = Local::now().format("%d.%m.%Y").to_string();
-    let bin_path = format!("{}/bin", project_path);
-    let node_modules_path = format!("{}/node_modules/.bin", project_path);
+fn print_envrc(project_path: &str) -> io::Result<()> {
+    let envrc_path = format!("{}/.envrc", project_path);
+    let envrc_path = Path::new(&envrc_path);
     
-    println!("#!/usr/bin/env bash");
-    println!();
-    println!("[ -d {} ] && export PATH={}:$PATH", bin_path, bin_path);
-    println!("[ -d {} ] && export PATH={}:$PATH", node_modules_path, node_modules_path);
-    println!("export PROJECT_PATH={}", project_path);
-    println!("export PROJECT_BIN={}/bin", project_path);
-    println!("export PROJECT_NAME={}", project_name);
-    println!("export PROJECT_CREATED=\"{}\"", date);
-    println!("export VAR_ROOT=\"$PROJECT_PATH/tmp\"");
-    
+    if envrc_path.exists() {
+        let content = fs::read_to_string(envrc_path)?;
+        print!("{}", content);
+    } else {
+        eprintln!("No .envrc file found in project root");
+    }    
+
     Ok(())
 }
 
@@ -212,7 +208,7 @@ fn main() -> io::Result<()> {
         .to_string();
     
     if args.len() < 2 {
-        print_envrc(&project_path, &project_name)?;
+        print_envrc(&project_path)?;
         return Ok(());
     }
     
@@ -226,7 +222,7 @@ fn main() -> io::Result<()> {
             init_project(&project_path, &project_name)?;
         }
         "erc" => {
-            print_envrc(&project_path, &project_name)?;
+            print_envrc(&project_path)?;
         }
         "e" | "edit" => {
             edit_file(".envrc")?;
@@ -244,7 +240,7 @@ fn main() -> io::Result<()> {
             if !script_name.is_empty() {
                 edit_script(script_name)?;
             } else {
-                print_envrc(&project_path, &project_name)?;
+                print_envrc(&project_path)?;
             }
         }
     }
