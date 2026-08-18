@@ -1,3 +1,16 @@
+//  _____  ___
+// /__   \/ __\  Tangerine Cat, kaineer@gmail.com
+//   / /\/ /
+//  / / / /___   github: https://github.com/kaineer
+//  \/  \____/   twitter: https://twitter.com/kaineer
+//
+// What: Project environment script
+//
+// Dependencies:
+//  * direnv
+//  * EDITOR environment variable
+//
+
 use std::env;
 use std::fs;
 use std::io;
