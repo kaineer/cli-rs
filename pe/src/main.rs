@@ -14,9 +14,11 @@
 use std::env;
 use std::fs;
 use std::io;
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use chrono::Local;
+use colored::*;
 
 fn get_project_path() -> io::Result<String> {
     match env::var("PROJECT_PATH") {
@@ -177,7 +179,17 @@ fn list_in_bin(option: Option<&String>) -> io::Result<()> {
 
 fn create_footprint(project_path: &str) -> io::Result<()> {
     let user = env::var("USER").unwrap_or_else(|_| "unknown".to_string());
-    let hostname = env::var("HOSTNAME").unwrap_or_else(|_| "unknown".to_string());
+    let hostname = env::var("HOSTNAME")
+        .or_else(|_| {
+            let output = Command::new("hostname").output();
+            match output {
+                Ok(out) if !out.stdout.is_empty() => {
+                    String::from_utf8(out.stdout).map(|s| s.trim().to_string())
+                }
+                _ => Ok("unknown".to_string())
+            }
+        })
+        .unwrap_or_else(|_| "unknown".to_string());
     
     let footprint_dir = format!("{}/config/footprint", project_path);
     fs::create_dir_all(&footprint_dir)?;
@@ -198,15 +210,33 @@ fn create_footprint(project_path: &str) -> io::Result<()> {
 }
 
 fn print_usage(base: &str) {
-    println!(" $ {} h[elp] -- show this text", base);
-    println!(" $ {} reinit -- init project environment again", base);
-    println!(" $ {} init -- create bin dir etc", base);
-    println!(" $ {} ls -- list created scripts", base);
-    println!(" $ {} e[dit] -- edit .envrc", base);
-    println!(" $ {} footprint|fp -- store .envrc for current user@host", base);
-    println!(" $ {} [scriptname] -- create/edit a script", base);
+    if !std::io::stdout().is_terminal() {
+        colored::control::set_override(false);
+    }
+    
+    println!("{}", "Project Environment Manager\n".bold().underline().cyan());
+    
+    // Макрос для удобства
+    macro_rules! line {
+        ($cmd:expr, $desc:expr) => {
+            println!(" {} {:<10} {:20} {} {}",
+                "$".cyan().bold(),
+                base.white().bold(),
+                $cmd.cyan().bold(),
+                "#".bright_black(),
+                $desc.bright_black()
+            );
+        };
+    }
+    
+    line!("h[elp]", "show this text");
+    line!("reinit", "init project environment again");
+    line!("init", "create bin dir etc");
+    line!("ls", "list created scripts");
+    line!("e[dit]", "edit .envrc");
+    line!("fp|footprint", "store .envrc for current user@host");
+    line!("[scriptname]", "create/edit a script");
 }
-
 
 fn main() -> io::Result<()> {
     let args: Vec<String> = env::args().collect();
