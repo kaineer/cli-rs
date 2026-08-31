@@ -14,17 +14,29 @@ struct Cli {
     #[arg(value_parser = validate_file)]
     file: PathBuf,
 
-    /// Create backup of original file
-    #[arg(short, long, default_value_t = true)]
+    /// Create backup of original file (default: true)
+    #[arg(long, default_value_t = true)]
     backup: bool,
 
-    /// Dry run - show what would be changed
+    /// Don't create backup of original file
+    #[arg(long)]
+    no_backup: bool,
+
+    /// Dry run - show what would be changed without writing files
     #[arg(short, long)]
     dry_run: bool,
 
     /// Output directory for CSS files (default: same as source)
     #[arg(short, long)]
     output_dir: Option<PathBuf>,
+
+    /// Quiet mode - no output (default)
+    #[arg(short, long, conflicts_with = "verbose")]
+    quiet: bool,
+
+    /// Verbose mode - show all output
+    #[arg(short, long, conflicts_with = "quiet")]
+    verbose: bool,
 }
 
 fn validate_file(path: &str) -> Result<PathBuf, String> {
@@ -40,16 +52,84 @@ fn validate_file(path: &str) -> Result<PathBuf, String> {
     Ok(path)
 }
 
+/// Структура для управления выводом
+struct Logger {
+    quiet: bool,
+    verbose: bool,
+}
+
+impl Logger {
+    fn new(quiet: bool, verbose: bool) -> Self {
+        Self { quiet, verbose }
+    }
+
+    fn log(&self, message: &str) {
+        if !self.quiet {
+            println!("{}", message);
+        }
+    }
+
+    fn log_verbose(&self, message: &str) {
+        if self.verbose && !self.quiet {
+            println!("{}", message);
+        }
+    }
+
+    fn log_success(&self, message: &str) {
+        if !self.quiet {
+            println!("{} {}", "✅".green(), message);
+        }
+    }
+
+    fn log_info(&self, message: &str) {
+        if !self.quiet {
+            println!("{} {}", "ℹ️".blue(), message);
+        }
+    }
+
+    fn log_warning(&self, message: &str) {
+        if !self.quiet {
+            println!("{} {}", "⚠️".yellow(), message);
+        }
+    }
+
+    fn log_error(&self, message: &str) {
+        if !self.quiet {
+            println!("{} {}", "❌".red(), message);
+        }
+    }
+
+    fn log_debug(&self, message: &str) {
+        if self.verbose && !self.quiet {
+            println!("{} {}", "🔍".dimmed(), message);
+        }
+    }
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    let logger = Logger::new(cli.quiet, cli.verbose);
 
-    println!("{}", "🚀 Inline Style to CSS Module Converter".bold().cyan());
-    println!(
-        "{} {}",
-        "📖 Processing:".dimmed(),
-        cli.file.display().to_string().yellow()
-    );
-    println!();
+    // Правильная логика: backup включен только если указан --backup И НЕ указан --no-backup
+    let should_backup = cli.backup && !cli.no_backup;
+
+    // Если не quiet и не verbose, показываем базовую информацию
+    if !cli.quiet && !cli.verbose {
+        logger.log(&format!("{}", "🚀 Inline Style to CSS Module Converter".bold().cyan()));
+        logger.log(&format!("{} {}", "📖 Processing:".dimmed(), cli.file.display().to_string().yellow()));
+        logger.log("");
+    }
+
+    // Если verbose, показываем расширенную информацию
+    if cli.verbose {
+        logger.log_verbose(&format!("🔍 File: {}", cli.file.display()));
+        logger.log_verbose(&format!("🔍 Backup: {}", should_backup));
+        logger.log_verbose(&format!("🔍 Dry run: {}", cli.dry_run));
+        if let Some(dir) = &cli.output_dir {
+            logger.log_verbose(&format!("🔍 Output dir: {}", dir.display()));
+        }
+        logger.log_verbose("");
+    }
 
     // Parse the file
     let source = std::fs::read_to_string(&cli.file)?;
@@ -59,7 +139,7 @@ fn main() -> Result<()> {
     let style_mappings = parser::extract_styles(&program, &source)?;
 
     if style_mappings.is_empty() {
-        println!("{} No inline styles found", "ℹ️".blue());
+        logger.log_info("No inline styles found");
         return Ok(());
     }
 
@@ -70,28 +150,28 @@ fn main() -> Result<()> {
         .count();
     let mixed = total - const_only;
 
-    println!(
+    logger.log(&format!(
         "{} Found {} styles with constant properties",
         "🔍".bold(),
         total.to_string().yellow()
-    );
-    println!("   • Fully constant: {}", const_only.to_string().green());
-    println!("   • Mixed (with dynamic): {}", mixed.to_string().yellow());
-    println!();
+    ));
+    logger.log(&format!("   • Fully constant: {}", const_only.to_string().green()));
+    logger.log(&format!("   • Mixed (with dynamic): {}", mixed.to_string().yellow()));
+    logger.log("");
 
-    if mixed > 0 {
-        println!("{} Mixed styles (constants + dynamic):", "⚠️".yellow());
+    if mixed > 0 && cli.verbose {
+        logger.log_verbose("Mixed styles (constants + dynamic):");
         for mapping in style_mappings.iter().filter(|m| !m.dynamic_props.is_empty()) {
             let const_list: Vec<String> = mapping.const_props.keys().cloned().collect();
             let dyn_list: Vec<String> = mapping.dynamic_props.keys().cloned().collect();
-            println!(
+            logger.log_verbose(&format!(
                 "   • <{}>: constants: {} | dynamic: {}",
                 mapping.tag_name.green(),
                 const_list.join(", "),
                 dyn_list.join(", ")
-            );
+            ));
         }
-        println!();
+        logger.log_verbose("");
     }
 
     // Generate CSS
@@ -113,36 +193,36 @@ fn main() -> Result<()> {
         })
         .join(css_filename);
 
+    let css_content_display = if cli.verbose { Some(css_content.clone()) } else { None };
+
     if !cli.dry_run {
-        std::fs::write(&css_path, css_content)?;
-        println!(
-            "{} Created CSS file: {}",
-            "✅".green(),
-            css_path.display().to_string().yellow()
-        );
-        println!("   • Rules created: {}", style_mappings.len());
+        std::fs::write(&css_path, &css_content)?;
+        logger.log_success(&format!("Created CSS file: {}", css_path.display().to_string().yellow()));
+        logger.log(&format!("   • Rules created: {}", style_mappings.len()));
+        
+        if let Some(content) = css_content_display {
+            logger.log_verbose(&format!("📄 CSS content:\n{}", content));
+        }
     } else {
-        println!(
-            "{} Would create CSS file: {}",
-            "🔍".dimmed(),
-            css_path.display()
-        );
-        println!("{}", css_content.dimmed());
+        logger.log_info(&format!("Would create CSS file: {}", css_path.display()));
+        if let Some(content) = css_content_display {
+            logger.log_verbose(&format!("📄 CSS content:\n{}", content));
+        }
     }
 
     // Transform the source code
     let transformed = transformer::transform_jsx(&source, &style_mappings)?;
     let transformed = transformer::add_css_import(&transformed, &cli.file)?;
 
+    let transformed_display = if cli.verbose { Some(transformed.clone()) } else { None };
+
     if !cli.dry_run {
-        // Backup original - сохраняем с правильным расширением
-        if cli.backup {
-            // Получаем расширение оригинального файла
+        // Backup original (только если should_backup == true)
+        if should_backup {
             let original_ext = cli.file.extension()
                 .and_then(|e| e.to_str())
                 .unwrap_or("tsx");
             
-            // Создаем имя бэкапа с правильным расширением
             let backup_name = format!(
                 "{}.{}.bak",
                 cli.file.file_stem().unwrap().to_str().unwrap(),
@@ -151,29 +231,30 @@ fn main() -> Result<()> {
             let backup_path = cli.file.parent().unwrap_or(PathBuf::from(".").as_path()).join(backup_name);
             
             std::fs::copy(&cli.file, &backup_path)?;
-            println!(
-                "💾 Backup saved: {}",
-                backup_path.display().to_string().dimmed()
-            );
+            logger.log_success(&format!("Backup saved: {}", backup_path.display().to_string().dimmed()));
+        } else {
+            logger.log_verbose("⏭️ Skipping backup (disabled)");
         }
 
         // Write transformed file
-        std::fs::write(&cli.file, transformed)?;
-        println!(
-            "{} File updated: {}",
-            "✅".green(),
-            cli.file.display().to_string().yellow()
-        );
+        std::fs::write(&cli.file, &transformed)?;
+        logger.log_success(&format!("File updated: {}", cli.file.display().to_string().yellow()));
+        
+        if let Some(content) = transformed_display {
+            logger.log_verbose(&format!("📄 Transformed content:\n{}", content));
+        }
     } else {
-        println!("{} Would transform file:", "🔍".dimmed());
-        println!("{}", transformed.dimmed());
+        logger.log_info(&format!("Would transform file: {}", cli.file.display()));
+        if let Some(content) = transformed_display {
+            logger.log_verbose(&format!("📄 Transformed content:\n{}", content));
+        }
     }
 
-    if mixed > 0 && !cli.dry_run {
-        println!();
-        println!("{} Recommendation:", "💡".yellow());
-        println!("   Check files with mixed styles.");
-        println!("   Constant properties moved to CSS, dynamic remain in style.");
+    if mixed > 0 && !cli.dry_run && !cli.quiet {
+        logger.log("");
+        logger.log_warning("Recommendation:");
+        logger.log_warning("   Check files with mixed styles.");
+        logger.log_warning("   Constant properties moved to CSS, dynamic remain in style.");
     }
 
     Ok(())
