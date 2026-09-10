@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+"""Распаковывает markdown: заголовки вида '## `path`' + следующий код-блок → файл path."""
+
+import re
+import sys
+from pathlib import Path
+
+HEADER_RE = re.compile(r'^##\s+`([^`]+)`\s*$')
+FENCE_RE = re.compile(r'^```(\w*)\s*$')
+
+
+def unpack(text: str, out_dir: Path, dry_run: bool = False) -> int:
+    lines = text.splitlines()
+    i = 0
+    count = 0
+
+    while i < len(lines):
+        m = HEADER_RE.match(lines[i])
+        if not m:
+            i += 1
+            continue
+
+        target = m.group(1).strip()
+        i += 1
+
+        # Пропускаем пустые строки до открывающего fence
+        while i < len(lines) and lines[i].strip() == "":
+            i += 1
+
+        # Ищем открывающий fence
+        if i >= len(lines) or not FENCE_RE.match(lines[i]):
+            print(f"[skip] после заголовка `{target}` нет код-блока", file=sys.stderr)
+            continue
+
+        i += 1  # переходим на первую строку содержимого
+
+        # Собираем содержимое до закрывающего fence
+        body = []
+        while i < len(lines) and not lines[i].startswith("```"):
+            body.append(lines[i])
+            i += 1
+
+        if i >= len(lines):
+            print(f"[warn] не найден закрывающий ``` для `{target}`", file=sys.stderr)
+
+        i += 1  # пропускаем закрывающий fence
+
+        # Гарантируем завершающий перевод строки
+        content = "\n".join(body)
+        if content and not content.endswith("\n"):
+            content += "\n"
+
+        path = out_dir / target
+        if dry_run:
+            print(f"[dry] {path} ({len(body)} строк)")
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
+            print(f"[ok]  {path} ({len(body)} строк)")
+        count += 1
+
+    return count
+
+
+def main() -> int:
+    args = sys.argv[1:]
+    dry_run = "--dry-run" in args
+    args = [a for a in args if a != "--dry-run"]
+
+    if not args:
+        print("usage: unpack_md.py <file.md> [out_dir] [--dry-run]", file=sys.stderr)
+        return 2
+
+    src = Path(args[0])
+    out_dir = Path(args[1]) if len(args) > 1 else Path(".")
+
+    text = src.read_text(encoding="utf-8")
+    n = unpack(text, out_dir, dry_run=dry_run)
+    print(f"\nГотово: {n} файл(ов)")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

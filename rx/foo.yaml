@@ -1,0 +1,6 @@
+- cmd: /home/kaineer/bin/shed
+  label: shed
+- cmd: /home/kaineer/bin/aid
+  label: aid
+- cmd: /home/kaineer/bin/ax sync
+  label: ax sync
