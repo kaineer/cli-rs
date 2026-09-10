@@ -1,37 +1,67 @@
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, MouseButton, MouseEventKind};
+use crossterm::event::{
+    self, Event, KeyCode, KeyModifiers, MouseButton, MouseEventKind,
+};
 use std::time::Duration;
 
-use crate::app::{App, Panel};
+use crate::app::{App, Panel, RightMode};
 
 pub fn handle_events(app: &mut App, timeout: Duration) -> Result<()> {
     if !event::poll(timeout)? {
         return Ok(());
     }
     match event::read()? {
-        Event::Key(key) => handle_key(app, key.code),
+        Event::Key(key) => handle_key(app, key.code, key.modifiers),
         Event::Mouse(mouse) => handle_mouse(app, mouse),
         _ => {}
     }
     Ok(())
 }
 
-fn handle_key(app: &mut App, code: KeyCode) {
-    match code {
-        KeyCode::Char('q') | KeyCode::Esc => app.quit(),
-        KeyCode::Tab | KeyCode::BackTab => app.toggle_focus(),
-        KeyCode::Down | KeyCode::Char('j') => match app.focus {
+fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
+    match (code, modifiers) {
+        (KeyCode::Char('q'), _) | (KeyCode::Esc, _) => app.quit(),
+
+        (KeyCode::Tab, _) | (KeyCode::BackTab, _) => app.toggle_focus(),
+
+        // j / Down
+        (KeyCode::Down, _) | (KeyCode::Char('j'), KeyModifiers::NONE) => match app.focus {
             Panel::Left => app.next(),
-            Panel::Right => app.right_next(),
+            Panel::Right => match app.right_mode() {
+                RightMode::List => app.right_next(),
+                RightMode::Body => app.right_scroll(1),
+            },
         },
-        KeyCode::Up | KeyCode::Char('k') => match app.focus {
+        // k / Up
+        (KeyCode::Up, _) | (KeyCode::Char('k'), KeyModifiers::NONE) => match app.focus {
             Panel::Left => app.previous(),
-            Panel::Right => app.right_previous(),
+            Panel::Right => match app.right_mode() {
+                RightMode::List => app.right_previous(),
+                RightMode::Body => app.right_scroll(-1),
+            },
         },
-        KeyCode::Enter | KeyCode::Char(' ') | KeyCode::Char('l') => match app.focus {
-            Panel::Left => app.activate_selected(),
-            Panel::Right => { /* следующий шаг: показать stdout выбранного запуска */ }
-        },
+
+        // ^n / ^p — переход между запусками в правой панели (в обоих подрежимах)
+        (KeyCode::Char('n'), KeyModifiers::CONTROL) => {
+            if app.focus == Panel::Right {
+                app.right_next();
+            }
+        }
+        (KeyCode::Char('p'), KeyModifiers::CONTROL) => {
+            if app.focus == Panel::Right {
+                app.right_previous();
+            }
+        }
+
+        // Space — смена состояния раскрытия выделенного запуска в правой панели.
+        // В левой панели Space/Enter/l — запуск.
+        (KeyCode::Char(' '), _) | (KeyCode::Enter, _) | (KeyCode::Char('l'), KeyModifiers::NONE) => {
+            match app.focus {
+                Panel::Left => app.activate_selected(),
+                Panel::Right => app.right_toggle_view(),
+            }
+        }
+
         _ => {}
     }
 }

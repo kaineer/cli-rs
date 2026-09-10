@@ -7,7 +7,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::{format_duration, App, EntryState, Panel};
+use crate::app::{format_duration, App, EntryState, Panel, RunView, PREVIEW_LINES};
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     let size = f.area();
@@ -111,18 +111,25 @@ fn draw_left(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn draw_divider(f: &mut Frame, app: &App, area: Rect) {
-    let divider_style = Style::default()
-        .fg(Color::Yellow)
-        .add_modifier(Modifier::BOLD);
-
+    let divider_style = if app.dragging {
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        match app.focus {
+            Panel::Left => Style::default().fg(Color::Rgb(0x5e, 0x81, 0xac)),
+            Panel::Right => Style::default().fg(Color::Rgb(0xbf, 0x61, 0x6a)), // Nord red
+        }
+    };
     let divider_lines: Vec<Line> = (0..area.height)
         .map(|_| Line::from(Span::styled("┃", divider_style)))
         .collect();
-
     f.render_widget(Paragraph::new(divider_lines), area);
 }
 
 fn draw_right(f: &mut Frame, app: &mut App, area: Rect) {
+    app.right_area_height = area.height;
+
     let run_idxs = app.runs_for_selected();
 
     if run_idxs.is_empty() {
@@ -136,41 +143,100 @@ fn draw_right(f: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
 
-    let items: Vec<ListItem> = run_idxs
-        .iter()
-        .map(|&run_id| {
-            let run = &app.runs[run_id];
+    // Текущий выделенный индекс в списке истории.
+    let sel = app
+        .right_state
+        .selected()
+        .unwrap_or(0)
+        .min(run_idxs.len() - 1);
 
-            let sym = if run.ok { "✓" } else { "✗" };
-            let color = if run.ok { Color::Green } else { Color::Red };
+    let focus_style = highlight_style_for(Panel::Right, app.focus);
+    let mut lines: Vec<Line> = Vec::new();
+    let max_rows = area.height as usize;
 
-            let started: DateTime<Local> = run.started_at.into();
-            let hhmmss = started.format("%H:%M:%S").to_string();
+    // Рисуем от выделенного и вниз, пока влезает.
+    for (offset, &run_id) in run_idxs.iter().enumerate().skip(sel) {
+        let run = &app.runs[run_id];
+        let vs = app.run_views[run_id];
+        let is_selected = offset == sel;
 
-            let stdout_lines = run.stdout.lines().count();
-            let plural = plural_ru(stdout_lines);
+        let sym = if run.ok { "✓" } else { "✗" };
+        let color = if run.ok { Color::Green } else { Color::Red };
+        let started: DateTime<Local> = run.started_at.into();
+        let hhmmss = started.format("%H:%M:%S").to_string();
+        let total = run.stdout.lines().count();
+        let plural = plural_ru(total);
 
-            ListItem::new(Line::from(vec![
-                Span::styled(
-                    sym,
-                    Style::default().fg(color).add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(" "),
-                Span::styled(hhmmss, Style::default().fg(Color::Gray)),
-                Span::raw(" "),
-                Span::styled(
-                    format!("{stdout_lines} {plural}"),
-                    Style::default().fg(Color::Gray),
-                ),
-            ]))
-        })
-        .collect();
+        let header_spans = vec![
+            Span::styled(sym, Style::default().fg(color).add_modifier(Modifier::BOLD)),
+            Span::raw(" "),
+            Span::styled(hhmmss, Style::default().fg(Color::Gray)),
+            Span::raw(" "),
+            Span::styled(
+                format!("{total} {plural}"),
+                Style::default().fg(Color::Gray),
+            ),
+        ];
 
-    let list = List::new(items)
-        .highlight_style(highlight_style_for(Panel::Right, app.focus))
-        .highlight_symbol(" ");
+        let header_line = if is_selected && app.focus == Panel::Right {
+            // Подсветим фоном выделенной шапки
+            let mut spans = Vec::with_capacity(header_spans.len() + 1);
+            spans.push(Span::styled(" ", focus_style));
+            for s in header_spans {
+                spans.push(Span::styled(s.content.into_owned(), focus_style));
+            }
+            Line::from(spans)
+        } else {
+            let mut spans = Vec::with_capacity(header_spans.len() + 1);
+            spans.push(Span::raw(" "));
+            spans.extend(header_spans);
+            Line::from(spans)
+        };
+        lines.push(header_line);
 
-    f.render_stateful_widget(list, area, &mut app.right_state);
+        if lines.len() >= max_rows {
+            break;
+        }
+
+        // Тело: только для раскрытых.
+        let body_rows = match vs.view {
+            RunView::Collapsed => 0,
+            RunView::Preview => total.min(PREVIEW_LINES),
+            RunView::Full => total,
+        };
+
+        if body_rows > 0 {
+            let all: Vec<&str> = run.stdout.lines().collect();
+            let start = vs.scroll.min(all.len());
+            let end = (start + body_rows).min(all.len());
+            for l in &all[start..end] {
+                lines.push(Line::from(format!("  {l}")));
+                if lines.len() >= max_rows {
+                    break;
+                }
+            }
+
+            // Хвостовая строка — только в Preview и только если есть скрытое.
+            if vs.view == RunView::Preview && lines.len() < max_rows {
+                let shown = body_rows; // == min(PREVIEW_LINES, total)
+                let rest = total.saturating_sub(shown);
+                if rest > 0 {
+                    lines.push(Line::from(Span::styled(
+                        format!("--- ещё {rest} {} ---", plural_ru(rest)),
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                }
+            }
+        }
+
+        if lines.len() >= max_rows {
+            break;
+        }
+    }
+
+    lines.truncate(max_rows);
+
+    f.render_widget(Paragraph::new(lines), area);
 }
 
 fn draw_status(f: &mut Frame, app: &App, area: Rect) {
@@ -179,7 +245,7 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
         Panel::Right => "[RIGHT]",
     };
     let base = if app.status.is_empty() {
-        "↑/↓ — навигация, Enter/Space/l — запустить, Tab — фокус, q — выход".to_string()
+        "↑/↓ — навигация, Space — раскрыть, Tab — фокус, q — выход".to_string()
     } else {
         app.status.clone()
     };
