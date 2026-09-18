@@ -82,16 +82,13 @@ impl Field {
     }
 }
 
-/// Y-offset of each field and total content height (including gaps).
+/// Y-offset of each field and total content height.
 fn field_layout(fields: &[Field]) -> (Vec<u16>, u16) {
     let mut offsets = Vec::with_capacity(fields.len());
     let mut y = 0u16;
-    for (i, field) in fields.iter().enumerate() {
+    for field in fields {
         offsets.push(y);
         y = y.saturating_add(field.height());
-        if i + 1 < fields.len() {
-            y = y.saturating_add(1);
-        }
     }
     (offsets, y)
 }
