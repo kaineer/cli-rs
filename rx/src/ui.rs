@@ -8,6 +8,7 @@ use ratatui::{
 };
 
 use crate::app::{format_duration, App, EntryState, Panel, RunView, PREVIEW_LINES};
+use crate::run_record::RunRecord;
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     let size = f.area();
@@ -34,6 +35,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             Constraint::Min(1),
         ])
         .split(main_area);
+
+    app.left_panel_rect = horizontal[0];
+    app.right_panel_rect = horizontal[2];
 
     draw_left(f, app, horizontal[0]);
     draw_divider(f, app, horizontal[1]);
@@ -127,6 +131,31 @@ fn draw_divider(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(divider_lines), area);
 }
 
+/// Бейдж «необычного» завершения: KILL/SIGn/exit N/ERR.
+/// Для обычных 0 и 1 ничего не возвращаем.
+fn failure_badge(run: &RunRecord) -> Option<Span<'static>> {
+    if run.ok {
+        return None;
+    }
+    let red = Style::default().fg(Color::Red).add_modifier(Modifier::BOLD);
+
+    if let Some(sig) = run.signal {
+        let text = match sig {
+            9 => "KILL".to_string(),
+            n => format!("SIG{n}"),
+        };
+        return Some(Span::styled(text, red));
+    }
+    if let Some(code) = run.exit_code {
+        if code == 1 {
+            return None;
+        }
+        return Some(Span::styled(format!("exit {code}"), red));
+    }
+    // Ни кода, ни сигнала — обычно ошибка spawn/wait.
+    Some(Span::styled("ERR", red))
+}
+
 fn draw_right(f: &mut Frame, app: &mut App, area: Rect) {
     app.right_area_height = area.height;
 
@@ -143,43 +172,72 @@ fn draw_right(f: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
 
-    // Текущий выделенный индекс в списке истории.
+    app.recompute_right_first();
+
     let sel = app
         .right_state
         .selected()
         .unwrap_or(0)
         .min(run_idxs.len() - 1);
 
+    let in_body = app.in_body_mode();
     let focus_style = highlight_style_for(Panel::Right, app.focus);
     let mut lines: Vec<Line> = Vec::new();
     let max_rows = area.height as usize;
 
-    // Рисуем от выделенного и вниз, пока влезает.
-    for (offset, &run_id) in run_idxs.iter().enumerate().skip(sel) {
+    let first = app.right_first_visible.min(run_idxs.len() - 1);
+
+    for (offset, &run_id) in run_idxs.iter().enumerate().skip(first) {
         let run = &app.runs[run_id];
-        let vs = app.run_views[run_id];
         let is_selected = offset == sel;
 
+        // В Body всё, кроме выделенного, схлопываем.
+        let effective_view = if in_body && !is_selected {
+            RunView::Collapsed
+        } else {
+            app.run_views[run_id].view
+        };
+
+        let subdued = in_body && !is_selected;
+
         let sym = if run.ok { "✓" } else { "✗" };
-        let color = if run.ok { Color::Green } else { Color::Red };
+        let sym_color = if subdued {
+            Color::DarkGray
+        } else if run.ok {
+            Color::Green
+        } else {
+            Color::Red
+        };
+        let meta_color = if subdued {
+            Color::DarkGray
+        } else {
+            Color::Gray
+        };
+
         let started: DateTime<Local> = run.started_at.into();
         let hhmmss = started.format("%H:%M:%S").to_string();
         let total = run.stdout.lines().count();
         let plural = plural_ru(total);
 
-        let header_spans = vec![
-            Span::styled(sym, Style::default().fg(color).add_modifier(Modifier::BOLD)),
-            Span::raw(" "),
-            Span::styled(hhmmss, Style::default().fg(Color::Gray)),
-            Span::raw(" "),
+        let mut header_spans = vec![
             Span::styled(
-                format!("{total} {plural}"),
-                Style::default().fg(Color::Gray),
+                sym,
+                Style::default().fg(sym_color).add_modifier(Modifier::BOLD),
             ),
+            Span::raw(" "),
+            Span::styled(hhmmss, Style::default().fg(meta_color)),
+            Span::raw(" "),
         ];
+        if let Some(badge) = failure_badge(run) {
+            header_spans.push(badge);
+            header_spans.push(Span::raw(" "));
+        }
+        header_spans.push(Span::styled(
+            format!("{total} {plural}"),
+            Style::default().fg(meta_color),
+        ));
 
         let header_line = if is_selected && app.focus == Panel::Right {
-            // Подсветим фоном выделенной шапки
             let mut spans = Vec::with_capacity(header_spans.len() + 1);
             spans.push(Span::styled(" ", focus_style));
             for s in header_spans {
@@ -198,14 +256,14 @@ fn draw_right(f: &mut Frame, app: &mut App, area: Rect) {
             break;
         }
 
-        // Тело: только для раскрытых.
-        let body_rows = match vs.view {
+        let body_rows = match effective_view {
             RunView::Collapsed => 0,
             RunView::Preview => total.min(PREVIEW_LINES),
             RunView::Full => total,
         };
 
         if body_rows > 0 {
+            let vs = app.run_views[run_id];
             let all: Vec<&str> = run.stdout.lines().collect();
             let start = vs.scroll.min(all.len());
             let end = (start + body_rows).min(all.len());
@@ -216,9 +274,8 @@ fn draw_right(f: &mut Frame, app: &mut App, area: Rect) {
                 }
             }
 
-            // Хвостовая строка — только в Preview и только если есть скрытое.
-            if vs.view == RunView::Preview && lines.len() < max_rows {
-                let shown = body_rows; // == min(PREVIEW_LINES, total)
+            if effective_view == RunView::Preview && lines.len() < max_rows {
+                let shown = body_rows;
                 let rest = total.saturating_sub(shown);
                 if rest > 0 {
                     lines.push(Line::from(Span::styled(

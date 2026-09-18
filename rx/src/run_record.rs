@@ -11,8 +11,10 @@ pub struct RunRecord {
     pub finished_at: SystemTime,
     /// Сколько длилось выполнение.
     pub duration: Duration,
-    /// Код выхода (None, если процесс убит сигналом).
+    /// Код возврата, если процесс завершился нормально (не сигналом).
     pub exit_code: Option<i32>,
+    /// Номер сигнала, если процесс убит сигналом (Unix-only; на других ОС — None).
+    pub signal: Option<i32>,
     /// Успех = exit_code == Some(0).
     pub ok: bool,
     /// Собранный stdout (UTF-8, lossy).

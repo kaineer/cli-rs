@@ -1,0 +1,8 @@
+name: string:widget=text,default=John,label=Имя
+password: string:widget=password
+description: string:widget=textarea,height=4
+color: string:widget=select,options=Red(1)|Green(2)|Blue(3)
+present: boolean
+sides:
+  left: boolean
+  right: boolean
