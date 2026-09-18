@@ -1,8 +1,11 @@
 // es — YAML schema parser / TUI editor (WIP)
 
 mod dump;
+mod edit;
+mod io_args;
 mod kitchensink;
 mod parse;
+mod status;
 mod widgets;
 
 use std::env;
@@ -34,6 +37,14 @@ fn run() -> Result<()> {
             }
             kitchensink::run()
         }
+        "status" => {
+            let io = io_args::parse_args(args)?;
+            status::run(io)
+        }
+        "edit" => {
+            let io = io_args::parse_args(args)?;
+            edit::run(io)
+        }
         "dump" => {
             let Some(path) = args.next() else {
                 bail!("{}", usage());
@@ -47,7 +58,6 @@ fn run() -> Result<()> {
             if args.next().is_some() {
                 bail!("{}", usage());
             }
-            // backward-compatible: `es schema.yaml`
             dump_schema(PathBuf::from(path))
         }
     }
@@ -57,11 +67,13 @@ fn dump_schema(path: PathBuf) -> Result<()> {
     if !path.is_file() {
         bail!("файл не найден: {}", path.display());
     }
-    let schema = parse::parse_file(&path)?;
+    let schema = crate::parse::parse_file(&path)?;
     dump::dump(&schema);
     Ok(())
 }
 
-fn usage() -> &'static str {
-    "usage:\n  es <schema.yaml>\n  es dump <schema.yaml>\n  es kitchensink"
+fn usage() -> String {
+    format!(
+        "usage:\n  es <schema.yaml>\n  es dump <schema.yaml>\n  es status --scheme <s.yaml> --input <d.yaml> [--output <o.yaml>]\n  es edit --scheme <s.yaml> --input <d.yaml> [--output <o.yaml>]\n  es kitchensink"
+    )
 }

@@ -20,6 +20,8 @@ pub struct Select {
     pub label: String,
     pub options: Vec<SelectOption>,
     pub selected: usize,
+    /// `false` = undefined (omit on save).
+    pub set: bool,
     pub open: bool,
 }
 
@@ -34,8 +36,14 @@ impl Select {
             label: label.into(),
             options,
             selected,
+            set: true,
             open: false,
         }
+    }
+
+    pub fn unset(mut self) -> Self {
+        self.set = false;
+        self
     }
 
     pub fn height(&self) -> u16 {
@@ -47,6 +55,9 @@ impl Select {
     }
 
     pub fn value(&self) -> Option<&str> {
+        if !self.set {
+            return None;
+        }
         self.options.get(self.selected).map(|o| o.value.as_str())
     }
 
@@ -65,6 +76,11 @@ impl Select {
             }
             KeyCode::Enter if self.open => {
                 self.open = false;
+                self.set = true;
+                true
+            }
+            KeyCode::Delete | KeyCode::Backspace if !self.open => {
+                self.set = false;
                 true
             }
             KeyCode::Up | KeyCode::Char('k') if self.open => {
@@ -97,11 +113,14 @@ impl Select {
             return;
         }
 
-        let current = self
-            .options
-            .get(self.selected)
-            .map(|o| o.label.as_str())
-            .unwrap_or("—");
+        let current = if self.set {
+            self.options
+                .get(self.selected)
+                .map(|o| o.label.as_str())
+                .unwrap_or("—")
+        } else {
+            "—"
+        };
         let marker = if self.open { "▼" } else { "▸" };
         let head = Line::from(Span::styled(
             format!(" {marker} {current}"),

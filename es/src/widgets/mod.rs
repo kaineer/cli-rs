@@ -1,5 +1,6 @@
 //! Interactive form widgets for the TUI (not schema DSL types).
 
+mod button;
 mod checkbox;
 mod enable;
 mod password;
@@ -7,6 +8,7 @@ mod select;
 mod text;
 mod textarea;
 
+pub use button::Button;
 pub use checkbox::Checkbox;
 pub use enable::Enable;
 pub use password::Password;
