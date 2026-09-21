@@ -21,6 +21,7 @@ pub struct TextArea {
     pub row: usize,
     pub col: usize,
     pub view_height: u16,
+    pub editing: bool,
     /// Inner width from the last render (for visual Up/Down).
     last_width: usize,
 }
@@ -48,19 +49,50 @@ impl TextArea {
             row: 0,
             col: 0,
             view_height: view_height.max(1),
+            editing: false,
             last_width: 0,
         }
     }
 
     pub fn height(&self) -> u16 {
-        1 + self.view_height
+        if self.editing {
+            1 + self.view_height
+        } else {
+            1
+        }
+    }
+
+    pub fn is_editing(&self) -> bool {
+        self.editing
     }
 
     pub fn text(&self) -> String {
         self.lines.join("\n")
     }
 
+    fn collapsed_preview(&self) -> String {
+        let text = self.text();
+        let first = text.lines().next().unwrap_or("").to_string();
+        if text.contains('\n') {
+            format!("{first}…")
+        } else {
+            first
+        }
+    }
+
     pub fn handle_key(&mut self, key: KeyEvent) -> bool {
+        if !self.editing {
+            if matches!(key.code, KeyCode::Enter) {
+                self.editing = true;
+                return true;
+            }
+            return false;
+        }
+        if matches!(key.code, KeyCode::Esc) {
+            self.editing = false;
+            return true;
+        }
+
         self.clamp_cursor();
         let width = self.last_width;
         match key.code {
@@ -92,7 +124,6 @@ impl TextArea {
                 true
             }
             KeyCode::Home => {
-                // Start of current visual row if wrapped, else line start.
                 if width > 0 {
                     let visual = build_visual(&self.lines, width);
                     let vi = visual_index_for_cursor(&visual, self.row, self.col);
@@ -170,6 +201,14 @@ impl TextArea {
         if area.height == 0 || area.width == 0 {
             return;
         }
+        if !focused {
+            self.editing = false;
+        }
+        if !self.editing {
+            use super::text::render_collapsed;
+            render_collapsed(f, area, &self.label, &self.collapsed_preview(), focused);
+            return;
+        }
         let body = Rect {
             y: area.y + 1,
             height: area.height.saturating_sub(1).min(self.view_height),
@@ -184,7 +223,7 @@ impl TextArea {
             return;
         }
         let label = Line::from(Span::styled(
-            format!(" {}", self.label),
+            format!(" {}: ", self.label),
             label_style(focused),
         ));
         f.render_widget(Paragraph::new(label), Rect { height: 1, ..area });

@@ -8,12 +8,13 @@ use ratatui::{
 
 use super::{input_cursor_style, input_style, label_style};
 
-/// Single-line text input.
+/// Single-line text input with collapsed / editing modes.
 #[derive(Debug, Clone)]
 pub struct Text {
     pub label: String,
     pub value: String,
     pub cursor: usize,
+    pub editing: bool,
 }
 
 impl Text {
@@ -24,27 +25,47 @@ impl Text {
             label: label.into(),
             value,
             cursor,
+            editing: false,
         }
     }
 
     pub fn height(&self) -> u16 {
-        2
+        if self.editing {
+            2
+        } else {
+            1
+        }
+    }
+
+    pub fn is_editing(&self) -> bool {
+        self.editing
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> bool {
+        if !self.editing {
+            if matches!(key.code, KeyCode::Enter) {
+                self.editing = true;
+                self.cursor = self.value.chars().count();
+                return true;
+            }
+            return false;
+        }
+        if matches!(key.code, KeyCode::Enter | KeyCode::Esc) {
+            self.editing = false;
+            return true;
+        }
         handle_line_edit(&mut self.value, &mut self.cursor, key)
     }
 
-    pub fn render(&self, f: &mut Frame, area: Rect, focused: bool) {
-        render_line_field(
-            f,
-            area,
-            &self.label,
-            &self.value,
-            self.cursor,
-            focused,
-            false,
-        );
+    pub fn render(&mut self, f: &mut Frame, area: Rect, focused: bool) {
+        if !focused {
+            self.editing = false;
+        }
+        if self.editing {
+            render_editing_line(f, area, &self.label, &self.value, self.cursor, focused, false);
+        } else {
+            render_collapsed(f, area, &self.label, &self.value, focused);
+        }
     }
 }
 
@@ -127,7 +148,44 @@ pub(super) fn fit_width(s: &str, width: usize) -> String {
     out
 }
 
-pub(super) fn render_line_field(
+/// Collapsed: ` label: preview…` on one line to the right edge.
+pub(super) fn render_collapsed(
+    f: &mut Frame,
+    area: Rect,
+    label: &str,
+    preview: &str,
+    focused: bool,
+) {
+    if area.height == 0 || area.width == 0 {
+        return;
+    }
+    let prefix = format!(" {label}: ");
+    let prefix_len = prefix.chars().count();
+    let avail = (area.width as usize).saturating_sub(prefix_len);
+    let shown: String = if avail == 0 {
+        String::new()
+    } else {
+        let chars: Vec<char> = preview.chars().collect();
+        if chars.len() <= avail {
+            chars.into_iter().collect()
+        } else if avail <= 1 {
+            "…".to_string()
+        } else {
+            let take = avail - 1;
+            let mut s: String = chars.into_iter().take(take).collect();
+            s.push('…');
+            s
+        }
+    };
+    let line = Line::from(vec![
+        Span::styled(prefix, label_style(focused)),
+        Span::styled(shown, input_style(false)),
+    ]);
+    f.render_widget(Paragraph::new(line), Rect { height: 1, ..area });
+}
+
+/// Editing: label with colon on first row, full-width input on the second.
+pub(super) fn render_editing_line(
     f: &mut Frame,
     area: Rect,
     label: &str,
@@ -140,7 +198,7 @@ pub(super) fn render_line_field(
         return;
     }
     let label_line = Line::from(Span::styled(
-        format!(" {label}"),
+        format!(" {label}:"),
         label_style(focused),
     ));
     f.render_widget(Paragraph::new(label_line), Rect { height: 1, ..area });

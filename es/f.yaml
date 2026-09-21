@@ -1,5 +1,5 @@
 name: string:widget=text,default=John,label=Имя
-password: string:widget=password
+password: string:widget=password,empty=не задан,filled=задан
 description: string:widget=textarea,height=4
 color: string:widget=select,options=Red(1)|Green(2)|Blue(3)
 present: boolean

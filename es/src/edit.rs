@@ -97,8 +97,23 @@ impl FormField {
         }
     }
 
-    fn select_open(&self) -> bool {
-        matches!(&self.widget, FormWidget::Select(s) if s.open)
+    fn is_editing(&self) -> bool {
+        match &self.widget {
+            FormWidget::Text { w, .. } => w.is_editing(),
+            FormWidget::Password { w, .. } => w.is_editing(),
+            FormWidget::TextArea { w, .. } => w.is_editing(),
+            FormWidget::Select(s) => s.open(),
+            _ => false,
+        }
+    }
+
+    fn end_editing(&mut self) {
+        match &mut self.widget {
+            FormWidget::Text { w, .. } => w.editing = false,
+            FormWidget::Password { w, .. } => w.editing = false,
+            FormWidget::TextArea { w, .. } => w.editing = false,
+            _ => {}
+        }
     }
 
     fn to_yaml(&self) -> Option<Value> {
@@ -182,8 +197,8 @@ impl App {
     }
 
     fn focus_next(&mut self) {
-        if matches!(self.focus, Focus::Field(i) if self.fields[i].select_open()) {
-            return;
+        if let Focus::Field(i) = self.focus {
+            self.fields[i].end_editing();
         }
         self.focus = match self.focus {
             Focus::Field(i) if i + 1 < self.fields.len() => Focus::Field(i + 1),
@@ -193,8 +208,8 @@ impl App {
     }
 
     fn focus_prev(&mut self) {
-        if matches!(self.focus, Focus::Field(i) if self.fields[i].select_open()) {
-            return;
+        if let Focus::Field(i) = self.focus {
+            self.fields[i].end_editing();
         }
         self.focus = match self.focus {
             Focus::Field(0) => Focus::Save,
@@ -269,10 +284,10 @@ fn build_field(schema: &SchemaField, data: &Mapping) -> Result<FormField> {
                 defined,
             }
         }
-        SchemaWidget::Password => {
+        SchemaWidget::Password { empty, filled } => {
             let (value, defined) = string_value(raw, &schema.default, in_data);
             FormWidget::Password {
-                w: Password::new(label, value),
+                w: Password::with_hints(label, value, empty.clone(), filled.clone()),
                 defined,
             }
         }
@@ -443,7 +458,7 @@ fn handle_key(
     viewport_h: u16,
     total_h: u16,
 ) -> Result<()> {
-    let select_open = matches!(app.focus, Focus::Field(i) if app.fields[i].select_open());
+    let editing = matches!(app.focus, Focus::Field(i) if app.fields[i].is_editing());
 
     match (key.code, key.modifiers) {
         (KeyCode::Char('q'), KeyModifiers::CONTROL)
@@ -451,7 +466,7 @@ fn handle_key(
             app.should_quit = true;
             return Ok(());
         }
-        (KeyCode::Esc, _) if !select_open => {
+        (KeyCode::Esc, _) if !editing => {
             app.should_quit = true;
             return Ok(());
         }
@@ -501,7 +516,7 @@ fn draw(f: &mut Frame, app: &mut App) {
 
     f.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            " edit — Tab focus · Enter/Space Save · Esc discard",
+            " edit — Enter edit · Tab leave/next · Esc discard · Space Save",
             Style::default().fg(Color::Cyan),
         ))),
         chunks[0],

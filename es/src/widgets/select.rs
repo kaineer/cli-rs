@@ -1,12 +1,13 @@
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     layout::Rect,
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
     Frame,
 };
 
-use super::{field_style, label_style};
+use super::label_style;
 
 #[derive(Debug, Clone)]
 pub struct SelectOption {
@@ -14,7 +15,7 @@ pub struct SelectOption {
     pub value: String,
 }
 
-/// Dropdown-like select: collapsed shows current; open lists options.
+/// Inline select in the same style as `Enable`: options separated by ` · `.
 #[derive(Debug, Clone)]
 pub struct Select {
     pub label: String,
@@ -22,7 +23,6 @@ pub struct Select {
     pub selected: usize,
     /// `false` = undefined (omit on save).
     pub set: bool,
-    pub open: bool,
 }
 
 impl Select {
@@ -37,7 +37,6 @@ impl Select {
             options,
             selected,
             set: true,
-            open: false,
         }
     }
 
@@ -47,11 +46,7 @@ impl Select {
     }
 
     pub fn height(&self) -> u16 {
-        if self.open {
-            2 + self.options.len() as u16
-        } else {
-            2
-        }
+        1
     }
 
     pub fn value(&self) -> Option<&str> {
@@ -61,38 +56,37 @@ impl Select {
         self.options.get(self.selected).map(|o| o.value.as_str())
     }
 
+    /// Kept for form focus logic; inline select is never "open".
+    pub fn open(&self) -> bool {
+        false
+    }
+
     pub fn handle_key(&mut self, key: KeyEvent) -> bool {
         if self.options.is_empty() {
             return false;
         }
         match key.code {
-            KeyCode::Enter | KeyCode::Char(' ') if !self.open => {
-                self.open = true;
-                true
-            }
-            KeyCode::Esc if self.open => {
-                self.open = false;
-                true
-            }
-            KeyCode::Enter if self.open => {
-                self.open = false;
-                self.set = true;
-                true
-            }
-            KeyCode::Delete | KeyCode::Backspace if !self.open => {
-                self.set = false;
-                true
-            }
-            KeyCode::Up | KeyCode::Char('k') if self.open => {
+            KeyCode::Left | KeyCode::Char('h') | KeyCode::Up | KeyCode::Char('k') => {
                 if self.selected == 0 {
                     self.selected = self.options.len() - 1;
                 } else {
                     self.selected -= 1;
                 }
+                self.set = true;
                 true
             }
-            KeyCode::Down | KeyCode::Char('j') if self.open => {
+            KeyCode::Right
+            | KeyCode::Char('l')
+            | KeyCode::Down
+            | KeyCode::Char('j')
+            | KeyCode::Char(' ')
+            | KeyCode::Enter => {
                 self.selected = (self.selected + 1) % self.options.len();
+                self.set = true;
+                true
+            }
+            KeyCode::Delete | KeyCode::Backspace => {
+                self.set = false;
                 true
             }
             _ => false,
@@ -103,63 +97,39 @@ impl Select {
         if area.height == 0 {
             return;
         }
-        let label = Line::from(Span::styled(
-            format!(" {}", self.label),
+
+        let active = Style::default()
+            .fg(Color::Green)
+            .add_modifier(Modifier::BOLD);
+        let inactive = Style::default().fg(Color::DarkGray);
+        let unknown = Style::default().fg(Color::Yellow);
+
+        let mut spans = vec![Span::styled(
+            format!(" {}: ", self.label),
             label_style(focused),
-        ));
-        f.render_widget(Paragraph::new(label), Rect { height: 1, ..area });
+        )];
 
-        if area.height < 2 {
-            return;
-        }
-
-        let current = if self.set {
-            self.options
-                .get(self.selected)
-                .map(|o| o.label.as_str())
-                .unwrap_or("—")
-        } else {
-            "—"
-        };
-        let marker = if self.open { "▼" } else { "▸" };
-        let head = Line::from(Span::styled(
-            format!(" {marker} {current}"),
-            field_style(focused),
-        ));
-        f.render_widget(
-            Paragraph::new(head),
-            Rect {
-                y: area.y + 1,
-                height: 1,
-                ..area
-            },
-        );
-
-        if !self.open || area.height < 3 {
-            return;
-        }
-
-        let list_area = Rect {
-            y: area.y + 2,
-            height: area.height.saturating_sub(2),
-            ..area
-        };
-        let mut lines = Vec::new();
         for (i, opt) in self.options.iter().enumerate() {
-            if lines.len() as u16 >= list_area.height {
-                break;
+            if i > 0 {
+                spans.push(Span::raw(" · "));
             }
-            let prefix = if i == self.selected { "› " } else { "  " };
-            let style = if focused && i == self.selected {
-                field_style(true)
+            let style = if !self.set {
+                unknown
+            } else if i == self.selected {
+                active
             } else {
-                field_style(false)
+                inactive
             };
-            lines.push(Line::from(Span::styled(
-                format!(" {prefix}{}", opt.label),
-                style,
-            )));
+            spans.push(Span::styled(opt.label.clone(), style));
         }
-        f.render_widget(Paragraph::new(lines), list_area);
+
+        if self.options.is_empty() {
+            spans.push(Span::styled("—", unknown));
+        }
+
+        f.render_widget(
+            Paragraph::new(Line::from(spans)),
+            Rect { height: 1, ..area },
+        );
     }
 }

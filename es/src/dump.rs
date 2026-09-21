@@ -47,7 +47,11 @@ fn fmt_value_type(t: &ValueType) -> String {
 fn fmt_widget(w: &Widget) -> String {
     match w {
         Widget::Text => "text".into(),
-        Widget::Password => "password".into(),
+        Widget::Password { empty, filled } => {
+            let empty = empty.as_deref().unwrap_or("empty");
+            let filled = filled.as_deref().unwrap_or("provided");
+            format!("password(empty={empty}, filled={filled})")
+        }
         Widget::Textarea { height } => match height {
             Some(h) => format!("textarea(height={h})"),
             None => "textarea".into(),

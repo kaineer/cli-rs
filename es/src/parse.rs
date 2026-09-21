@@ -20,7 +20,10 @@ pub enum ValueType {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Widget {
     Text,
-    Password,
+    Password {
+        empty: Option<String>,
+        filled: Option<String>,
+    },
     Textarea { height: Option<u32> },
     Select { options: Vec<SelectOption> },
     Checkbox,
@@ -208,7 +211,17 @@ fn parse_widget(
 ) -> Result<Widget> {
     match name {
         "text" => Ok(Widget::Text),
-        "password" => Ok(Widget::Password),
+        "password" => {
+            let empty = params
+                .iter()
+                .find(|(k, _)| k == "empty")
+                .map(|(_, v)| v.clone());
+            let filled = params
+                .iter()
+                .find(|(k, _)| k == "filled")
+                .map(|(_, v)| v.clone());
+            Ok(Widget::Password { empty, filled })
+        }
         "textarea" => Ok(Widget::Textarea { height }),
         "checkbox" => Ok(Widget::Checkbox),
         "enable" => {

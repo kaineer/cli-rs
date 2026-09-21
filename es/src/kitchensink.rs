@@ -64,8 +64,23 @@ impl Field {
         }
     }
 
-    fn select_open(&self) -> bool {
-        matches!(self, Field::Select(s) if s.open)
+    fn is_editing(&self) -> bool {
+        match self {
+            Field::Text(w) => w.is_editing(),
+            Field::Password(w) => w.is_editing(),
+            Field::TextArea(w) => w.is_editing(),
+            Field::Select(w) => w.open(),
+            _ => false,
+        }
+    }
+
+    fn end_editing(&mut self) {
+        match self {
+            Field::Text(w) => w.editing = false,
+            Field::Password(w) => w.editing = false,
+            Field::TextArea(w) => w.editing = false,
+            _ => {}
+        }
     }
 
     fn summary(&self) -> String {
@@ -145,16 +160,12 @@ impl App {
     }
 
     fn focus_next(&mut self) {
-        if self.fields[self.focus].select_open() {
-            return;
-        }
+        self.fields[self.focus].end_editing();
         self.focus = (self.focus + 1) % self.fields.len();
     }
 
     fn focus_prev(&mut self) {
-        if self.fields[self.focus].select_open() {
-            return;
-        }
+        self.fields[self.focus].end_editing();
         self.focus = if self.focus == 0 {
             self.fields.len() - 1
         } else {
@@ -234,7 +245,7 @@ fn handle_key(app: &mut App, key: crossterm::event::KeyEvent, viewport_h: u16, t
             app.should_quit = true;
             return;
         }
-        (KeyCode::Esc, _) if !app.fields[app.focus].select_open() => {
+        (KeyCode::Esc, _) if !app.fields[app.focus].is_editing() => {
             app.should_quit = true;
             return;
         }
@@ -274,7 +285,7 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
 
     f.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            " kitchensink — Tab/S-Tab focus · PgUp/PgDn scroll · Esc/C-q quit",
+            " kitchensink — Enter edit · Tab leave/next · Esc leave · C-q quit",
             Style::default().fg(Color::Cyan),
         ))),
         chunks[0],

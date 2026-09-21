@@ -75,6 +75,8 @@ present: boolean
 | `options` | варианты выбора | `select` |
 | `on` | подпись для `true` (по умолчанию `enabled`) | `enable` |
 | `off` | подпись для `false` (по умолчанию `disabled`) | `enable` |
+| `empty` | текст свёрнутого вида без пароля (по умолчанию `empty`) | `password` |
+| `filled` | текст свёрнутого вида при заданном пароле (по умолчанию `provided`) | `password` |
 
 Формат `options`:
 
@@ -102,6 +104,7 @@ option  := label "(" value ")"
 | `$options` | список вариантов для `select` |
 | `$height` | высота `textarea` |
 | `$on` / `$off` | подписи для виджета `enable` |
+| `$empty` / `$filled` | подписи свёрнутого вида для `password` |
 
 Эквивалентность компактной и полной формы:
 
@@ -158,7 +161,7 @@ sides:
 | `$widget` / `widget=` | `$type` по смыслу | TUI |
 |-----------------------|-------------------|-----|
 | `text` | `string` (обычно) | одна строка |
-| `password` | `string` | маскированный ввод; в файле — открытый текст |
+| `password` | `string` | маскированный ввод; свёрнуто — `empty`/`filled` (по умолчанию `empty`/`provided`); в файле — открытый текст |
 | `textarea` | `string` | много строк; `height` / `$height` — только UI |
 | `select` | `string` или `number` | выбор из списка; в файл пишется value |
 | `checkbox` | `boolean` | флажок, без раскрытия |
@@ -171,6 +174,13 @@ sides:
 ```yaml
 feature: boolean:widget=enable
 feature_ru: boolean:widget=enable,on=вкл,off=выкл
+```
+
+Пример `password`:
+
+```yaml
+password: string:widget=password
+secret: string:widget=password,empty=не задан,filled=задан
 ```
 
 ---

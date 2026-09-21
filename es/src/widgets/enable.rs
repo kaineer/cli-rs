@@ -71,7 +71,7 @@ impl Enable {
         };
 
         let line = Line::from(vec![
-            Span::styled(format!(" {} ", self.label), label_style(focused)),
+            Span::styled(format!(" {}: ", self.label), label_style(focused)),
             Span::styled(&self.on, on_style),
             Span::raw(" · "),
             Span::styled(&self.off, off_style),
