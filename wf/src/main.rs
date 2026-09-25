@@ -47,6 +47,8 @@ fn run(dir: &Path, args: &[String]) -> io::Result<()> {
 }
 
 fn usage() {
+    println!("Set wezterm options");
+    println!();
     println!(" $ wf ly           # turn ligatures on");
     println!(" $ wf ln           # turn ligatures off");
     println!(" $ wf ly 25        # ligatures on, then font size 25");
@@ -56,9 +58,6 @@ fn usage() {
     println!(" $ wf 25           # set font size 25");
     println!(" $ wf 16           # set font size 16");
     println!(" $ wf              # set font to 16, set ligatures off");
-    println!();
-    println!(" Ligature commands (ly/ln/lig) first set ligatures,");
-    println!(" then, if another argument is given, set font size.");
 }
 
 fn set_ligatures_with_optional_font(
