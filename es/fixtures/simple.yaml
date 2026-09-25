@@ -1,4 +1,3 @@
 name: string:widget=text,default=John,label=Имя
-present: boolean:widget=enable,default=false
-active: boolean:widget=checkbox,default=true,label=Активен
-feature_ru: boolean:widget=enable,on=вкл,off=выкл
+present: boolean:widget=enable,default=false,on=on,off=off,label=Присутствует
+active: boolean:widget=enable,default=true,label=Активен,on=on,off=off

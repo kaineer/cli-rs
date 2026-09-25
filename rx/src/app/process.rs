@@ -1,3 +1,4 @@
+use crate::sanitize::sanitize_output;
 use std::collections::HashSet;
 use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
@@ -125,11 +126,11 @@ impl ProcessPool {
             loop {
                 match rp.rx.try_recv() {
                     Ok(StreamLine::Stdout(l)) => {
-                        rp.stdout_buf.push_str(&l);
+                        rp.stdout_buf.push_str(&sanitize_output(&l));
                         rp.stdout_buf.push('\n');
                     }
                     Ok(StreamLine::Stderr(l)) => {
-                        rp.stderr_buf.push_str(&l);
+                        rp.stderr_buf.push_str(&sanitize_output(&l));
                         rp.stderr_buf.push('\n');
                     }
                     Ok(StreamLine::Eof) => {}
@@ -143,11 +144,11 @@ impl ProcessPool {
                     for _ in 0..5 {
                         match rp.rx.try_recv() {
                             Ok(StreamLine::Stdout(l)) => {
-                                rp.stdout_buf.push_str(&l);
+                                rp.stdout_buf.push_str(&sanitize_output(&l));
                                 rp.stdout_buf.push('\n');
                             }
                             Ok(StreamLine::Stderr(l)) => {
-                                rp.stderr_buf.push_str(&l);
+                                rp.stderr_buf.push_str(&sanitize_output(&l));
                                 rp.stderr_buf.push('\n');
                             }
                             _ => break,

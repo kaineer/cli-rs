@@ -169,13 +169,14 @@ struct App {
     scroll: u16,
     save_btn: Button,
     output: PathBuf,
+    silent: bool,
     should_quit: bool,
     saved: bool,
     status: String,
 }
 
 impl App {
-    fn from_schema(schema: &Schema, data: &Mapping, output: PathBuf) -> Result<Self> {
+    fn from_schema(schema: &Schema, data: &Mapping, output: PathBuf, silent: bool) -> Result<Self> {
         if schema.fields.is_empty() {
             bail!("в схеме нет полей для редактирования");
         }
@@ -190,6 +191,7 @@ impl App {
             scroll: 0,
             save_btn: Button::new("Save"),
             output,
+            silent,
             should_quit: false,
             saved: false,
             status: String::new(),
@@ -415,7 +417,7 @@ pub fn run(args: IoArgs) -> Result<()> {
     let backend = CrosstermBackend::new(out);
     let mut terminal = Terminal::new(backend).context("create terminal")?;
 
-    let mut app = App::from_schema(&schema, &data, args.output.clone())?;
+    let mut app = App::from_schema(&schema, &data, args.output.clone(), args.silent)?;
     let result = loop_ui(&mut terminal, &mut app);
 
     disable_raw_mode().ok();
@@ -440,7 +442,8 @@ fn loop_ui(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App)
         match event::read()? {
             Event::Key(key) if key.kind == KeyEventKind::Press => {
                 let size = terminal.size()?;
-                let viewport_h = size.height.saturating_sub(1 + 1 + 1);
+                let chrome = if app.silent { 1 + 1 } else { 1 + 1 + 1 };
+                let viewport_h = size.height.saturating_sub(chrome);
                 let (_, total_h) = field_layout(&app.fields);
                 if let Err(e) = handle_key(app, key, viewport_h, total_h) {
                     app.status = format!("ошибка: {e:#}");
@@ -478,6 +481,14 @@ fn handle_key(
             app.focus_prev();
             return Ok(());
         }
+        (KeyCode::Char('j'), KeyModifiers::NONE) if !editing => {
+            app.focus_next();
+            return Ok(());
+        }
+        (KeyCode::Char('k'), KeyModifiers::NONE) if !editing => {
+            app.focus_prev();
+            return Ok(());
+        }
         (KeyCode::PageDown, _) => {
             app.scroll_by(viewport_h as i32, viewport_h, total_h);
             return Ok(());
@@ -504,25 +515,40 @@ fn handle_key(
 
 fn draw(f: &mut Frame, app: &mut App) {
     let area = f.area();
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Min(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-        ])
-        .split(area);
+    let chunks = if app.silent {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Min(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+            ])
+            .split(area)
+    } else {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1),
+                Constraint::Min(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+            ])
+            .split(area)
+    };
 
-    f.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            " edit — Enter edit · Tab leave/next · Esc discard · Space Save",
-            Style::default().fg(Color::Cyan),
-        ))),
-        chunks[0],
-    );
+    let (form_area, btn_area, status_area) = if app.silent {
+        (chunks[0], chunks[1], chunks[2])
+    } else {
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                " edit — j/k or Tab · Enter edit · Esc discard · Space Save",
+                Style::default().fg(Color::Cyan),
+            ))),
+            chunks[0],
+        );
+        (chunks[1], chunks[2], chunks[3])
+    };
 
-    let form_area = chunks[1];
     let (offsets, total_h) = field_layout(&app.fields);
     let needs_scroll = total_h > form_area.height;
     let (content_area, scrollbar_area) = if needs_scroll && form_area.width > 1 {
@@ -573,7 +599,7 @@ fn draw(f: &mut Frame, app: &mut App) {
     let btn_row = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Length(10), Constraint::Min(0)])
-        .split(chunks[2]);
+        .split(btn_area);
     app.save_btn
         .render(f, btn_row[0], app.focus == Focus::Save);
 
@@ -587,6 +613,6 @@ fn draw(f: &mut Frame, app: &mut App) {
             format!(" {status}"),
             Style::default().fg(Color::DarkGray),
         ))),
-        chunks[3],
+        status_area,
     );
 }

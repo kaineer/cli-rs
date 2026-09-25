@@ -239,13 +239,14 @@ fn loop_ui(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App)
 }
 
 fn handle_key(app: &mut App, key: crossterm::event::KeyEvent, viewport_h: u16, total_h: u16) {
+    let editing = app.fields[app.focus].is_editing();
     match (key.code, key.modifiers) {
         (KeyCode::Char('q'), KeyModifiers::CONTROL)
         | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
             app.should_quit = true;
             return;
         }
-        (KeyCode::Esc, _) if !app.fields[app.focus].is_editing() => {
+        (KeyCode::Esc, _) if !editing => {
             app.should_quit = true;
             return;
         }
@@ -254,6 +255,14 @@ fn handle_key(app: &mut App, key: crossterm::event::KeyEvent, viewport_h: u16, t
             return;
         }
         (KeyCode::BackTab, _) => {
+            app.focus_prev();
+            return;
+        }
+        (KeyCode::Char('j'), KeyModifiers::NONE) if !editing => {
+            app.focus_next();
+            return;
+        }
+        (KeyCode::Char('k'), KeyModifiers::NONE) if !editing => {
             app.focus_prev();
             return;
         }
@@ -285,7 +294,7 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
 
     f.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            " kitchensink — Enter edit · Tab leave/next · Esc leave · C-q quit",
+            " kitchensink — j/k or Tab · Enter edit · Esc leave · C-q quit",
             Style::default().fg(Color::Cyan),
         ))),
         chunks[0],

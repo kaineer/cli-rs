@@ -74,6 +74,6 @@ fn dump_schema(path: PathBuf) -> Result<()> {
 
 fn usage() -> String {
     format!(
-        "usage:\n  es <schema.yaml>\n  es dump <schema.yaml>\n  es status --scheme <s.yaml> --input <d.yaml> [--output <o.yaml>]\n  es edit --scheme <s.yaml> --input <d.yaml> [--output <o.yaml>]\n  es kitchensink"
+        "usage:\n  es <schema.yaml>\n  es dump <schema.yaml>\n  es status --scheme <s.yaml> --input <d.yaml> [--output <o.yaml>]\n  es edit --scheme <s.yaml> --input <d.yaml> [--output <o.yaml>] [--silent]\n  es kitchensink"
     )
 }

@@ -66,7 +66,7 @@ impl Select {
             return false;
         }
         match key.code {
-            KeyCode::Left | KeyCode::Char('h') | KeyCode::Up | KeyCode::Char('k') => {
+            KeyCode::Left | KeyCode::Char('h') | KeyCode::Up => {
                 if self.selected == 0 {
                     self.selected = self.options.len() - 1;
                 } else {
@@ -78,7 +78,6 @@ impl Select {
             KeyCode::Right
             | KeyCode::Char('l')
             | KeyCode::Down
-            | KeyCode::Char('j')
             | KeyCode::Char(' ')
             | KeyCode::Enter => {
                 self.selected = (self.selected + 1) % self.options.len();

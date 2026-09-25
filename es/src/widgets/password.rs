@@ -40,11 +40,7 @@ impl Password {
     }
 
     pub fn height(&self) -> u16 {
-        if self.editing {
-            2
-        } else {
-            1
-        }
+        1
     }
 
     pub fn is_editing(&self) -> bool {

@@ -9,15 +9,27 @@ pub struct IoArgs {
     pub scheme: PathBuf,
     pub input: PathBuf,
     pub output: PathBuf,
+    /// Hide the navigation help header in `edit`.
+    pub silent: bool,
 }
 
-/// Parse options: `--scheme`, `--input`, optional `--output` (defaults to input).
+/// Parse options: `--scheme`, `--input`, optional `--output` (defaults to input),
+/// optional `--silent` (edit only).
 pub fn parse_args(mut args: impl Iterator<Item = String>) -> Result<IoArgs> {
     let mut scheme: Option<PathBuf> = None;
     let mut input: Option<PathBuf> = None;
     let mut output: Option<PathBuf> = None;
+    let mut silent = false;
 
     while let Some(arg) = args.next() {
+        if arg == "--silent" {
+            if silent {
+                bail!("повторный --silent");
+            }
+            silent = true;
+            continue;
+        }
+
         let (flag, value) = split_flag(&arg, &mut args)?;
         match flag.as_str() {
             "--scheme" => {
@@ -54,6 +66,7 @@ pub fn parse_args(mut args: impl Iterator<Item = String>) -> Result<IoArgs> {
         scheme,
         input,
         output,
+        silent,
     })
 }
 
@@ -68,7 +81,7 @@ fn split_flag(
         return Ok((flag.to_string(), value.to_string()));
     }
     if !arg.starts_with("--") {
-        bail!("неожиданный аргумент: {arg} (ожидались опции --scheme/--input/--output)");
+        bail!("неожиданный аргумент: {arg} (ожидались опции --scheme/--input/--output/--silent)");
     }
     let Some(value) = rest.next() else {
         bail!("опция {arg} требует значение");
@@ -77,5 +90,5 @@ fn split_flag(
 }
 
 pub fn usage_io() -> &'static str {
-    "  es <cmd> --scheme <schema.yaml> --input <data.yaml> [--output <out.yaml>]"
+    "  es <cmd> --scheme <schema.yaml> --input <data.yaml> [--output <out.yaml>] [--silent]"
 }

@@ -30,11 +30,7 @@ impl Text {
     }
 
     pub fn height(&self) -> u16 {
-        if self.editing {
-            2
-        } else {
-            1
-        }
+        1
     }
 
     pub fn is_editing(&self) -> bool {
@@ -184,7 +180,7 @@ pub(super) fn render_collapsed(
     f.render_widget(Paragraph::new(line), Rect { height: 1, ..area });
 }
 
-/// Editing: label with colon on first row, full-width input on the second.
+/// Editing: ` label: ` + input field on the same row, to the right edge.
 pub(super) fn render_editing_line(
     f: &mut Frame,
     area: Rect,
@@ -197,20 +193,12 @@ pub(super) fn render_editing_line(
     if area.height == 0 || area.width == 0 {
         return;
     }
-    let label_line = Line::from(Span::styled(
-        format!(" {label}:"),
-        label_style(focused),
-    ));
-    f.render_widget(Paragraph::new(label_line), Rect { height: 1, ..area });
 
-    if area.height < 2 {
-        return;
-    }
-    let value_area = Rect {
-        y: area.y + 1,
-        height: 1,
-        ..area
-    };
+    let prefix = format!(" {label}: ");
+    let prefix_len = prefix.chars().count();
+    let field_w = (area.width as usize).saturating_sub(prefix_len);
+    // Leave one trailing space like other inputs (padding on the right).
+    let width = field_w.saturating_sub(1);
 
     let display: String = if mask {
         "•".repeat(value.chars().count())
@@ -218,15 +206,17 @@ pub(super) fn render_editing_line(
         value.to_string()
     };
 
-    let width = inner_width(area);
     let style = input_style(focused);
-    let line = if width == 0 {
-        Line::from("")
-    } else if focused {
+    let mut spans = vec![Span::styled(prefix, label_style(focused))];
+
+    if width == 0 {
+        f.render_widget(Paragraph::new(Line::from(spans)), Rect { height: 1, ..area });
+        return;
+    }
+
+    if focused {
         let chars: Vec<char> = display.chars().collect();
         let start = scroll_start(chars.len(), cursor, width);
-
-        let mut spans = vec![Span::raw(" ")];
         let rel_cursor = cursor.saturating_sub(start).min(width.saturating_sub(1));
 
         let before: String = chars.iter().skip(start).take(rel_cursor).collect();
@@ -240,18 +230,13 @@ pub(super) fn render_editing_line(
         let after_chars: String = chars.iter().skip(after_start).take(after_take).collect();
         let after_len = after_chars.chars().count();
         let pad = width.saturating_sub(rel_cursor + 1 + after_len);
-        let after = format!("{after_chars}{}", " ".repeat(pad));
-        spans.push(Span::styled(after, style));
-        spans.push(Span::raw(" "));
-
-        Line::from(spans)
+        spans.push(Span::styled(
+            format!("{after_chars}{}", " ".repeat(pad)),
+            style,
+        ));
     } else {
-        let fitted = fit_width(&display, width);
-        Line::from(vec![
-            Span::raw(" "),
-            Span::styled(fitted, style),
-            Span::raw(" "),
-        ])
-    };
-    f.render_widget(Paragraph::new(line), value_area);
+        spans.push(Span::styled(fit_width(&display, width), style));
+    }
+
+    f.render_widget(Paragraph::new(Line::from(spans)), Rect { height: 1, ..area });
 }

@@ -9,6 +9,7 @@ use ratatui::{
 
 use crate::app::{format_duration, App, EntryState, Panel, RunView, PREVIEW_LINES};
 use crate::run_record::RunRecord;
+use crate::sanitize::ansi_line_to_spans;
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     let size = f.area();
@@ -268,7 +269,7 @@ fn draw_right(f: &mut Frame, app: &mut App, area: Rect) {
             let start = vs.scroll.min(all.len());
             let end = (start + body_rows).min(all.len());
             for l in &all[start..end] {
-                lines.push(Line::from(format!("  {l}")));
+                lines.push(Line::from(ansi_line_to_spans(l)));
                 if lines.len() >= max_rows {
                     break;
                 }

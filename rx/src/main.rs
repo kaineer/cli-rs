@@ -3,6 +3,7 @@ mod config;
 mod event;
 mod run;
 mod run_record;
+mod sanitize;
 mod ui;
 
 use std::{io::stdout, path::PathBuf};
