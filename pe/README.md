@@ -10,8 +10,7 @@ Requires `direnv` and `$EDITOR` (falls back to `vim`).
 ## Build / install
 
 ```bash
-make build
-make install   # → ~/bin/pe
+cargo install --path="."
 ```
 
 ## Usage

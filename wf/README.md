@@ -12,7 +12,7 @@ Copies preset fragments in `~/.config/wezterm/` so the live config picks them up
 ## Build
 
 ```bash
-cargo build --release
+cargo install --path="."
 ```
 
 ## Usage
