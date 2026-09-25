@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+
+DIR="$HOME/.config/wezterm"
+
+usage() {
+  echo " $ wf ly       # turn ligatures on"
+  echo " $ wf ln       # turn ligatures off"
+  echo " $ wf 25       # set font size 25"
+  echo " $ wf 16       # set font size 16"
+  echo " $ wf          # set font to 16, set ligatures off"
+}
+
+__set_ligatures() {
+  case "$1" in
+    "yes"|"on")
+      cp "$DIR/ligature.enabled.lua" "$DIR/ligature.lua"
+      ;;
+    "no"|"off")
+      cp "$DIR/ligature.disabled.lua" "$DIR/ligature.lua"
+      ;;
+  esac
+  if [[ "$2" != "" ]]; then
+    __set_font "$2"
+  fi
+}
+
+__set_font() {
+  case "$1" in
+    "big"|"large"|"25") 
+      cp "$DIR/font.25.lua" "$DIR/font.lua"
+      ;;
+    "small"|"16")
+      cp "$DIR/font.16.lua" "$DIR/font.lua"
+      ;;
+  esac
+}
+
+case "$1" in
+  # -- ligatures
+  "lig"|"ligature") shift; __set_ligatures $@ ;;
+  "ly") __set_ligatures "yes" $2 ;;
+  "ln") __set_ligatures "no" $2 ;;
+  # -- font
+  "f"|"font") __set_font $2 ;;
+  "25") __set_font "large" ;;
+  "16") __set_font "small" ;;
+  "h"|"--help") usage ;;
+  *)
+    __set_ligatures "no"
+    __set_font "small"
+    ;;
+esac
+

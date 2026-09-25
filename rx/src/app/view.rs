@@ -23,7 +23,7 @@ pub struct RunViewState {
 
 /// Высота блока одного запуска в строках при данном виде.
 pub fn block_height(run: &RunRecord, view: RunView) -> usize {
-    let total = run.stdout.lines().count();
+    let total = run.body_lines().len();
     match view {
         RunView::Collapsed => 1,
         RunView::Preview => {

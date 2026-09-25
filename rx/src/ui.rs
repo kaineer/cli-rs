@@ -217,7 +217,8 @@ fn draw_right(f: &mut Frame, app: &mut App, area: Rect) {
 
         let started: DateTime<Local> = run.started_at.into();
         let hhmmss = started.format("%H:%M:%S").to_string();
-        let total = run.stdout.lines().count();
+        let all = run.body_lines();
+        let total = all.len();
         let plural = plural_ru(total);
 
         let mut header_spans = vec![
@@ -265,7 +266,6 @@ fn draw_right(f: &mut Frame, app: &mut App, area: Rect) {
 
         if body_rows > 0 {
             let vs = app.run_views[run_id];
-            let all: Vec<&str> = run.stdout.lines().collect();
             let start = vs.scroll.min(all.len());
             let end = (start + body_rows).min(all.len());
             for l in &all[start..end] {

@@ -317,7 +317,7 @@ impl App {
             return;
         };
 
-        let total = self.runs[run_id].stdout.lines().count();
+        let total = self.runs[run_id].body_lines().len();
         let can_expand = total > PREVIEW_LINES;
 
         let current = self.run_views[run_id].view;
@@ -357,7 +357,7 @@ impl App {
 
         let content_rows = match state.view {
             RunView::Collapsed | RunView::Preview => return,
-            RunView::Full => self.runs[run_id].stdout.lines().count(),
+            RunView::Full => self.runs[run_id].body_lines().len(),
         };
 
         let viewport = (self.right_area_height as usize).saturating_sub(1);
