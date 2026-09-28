@@ -21,7 +21,7 @@ use crate::data::{self, DataFormat};
 use crate::io_args::IoArgs;
 use crate::parse::{self, Field as SchemaField, Schema, ValueType, Widget as SchemaWidget};
 use crate::widgets::{
-    Button, Checkbox, Enable, Password, Select, SelectOption, Text, TextArea,
+    Button, Enable, Password, Select, SelectOption, Text, TextArea,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,7 +35,6 @@ enum FormWidget {
     Password { w: Password, defined: bool },
     TextArea { w: TextArea, defined: bool },
     Select(Select),
-    Checkbox(Checkbox),
     Enable(Enable),
 }
 
@@ -52,7 +51,6 @@ impl FormField {
             FormWidget::Password { w, .. } => w.height(),
             FormWidget::TextArea { w, .. } => w.height(),
             FormWidget::Select(w) => w.height(),
-            FormWidget::Checkbox(w) => w.height(),
             FormWidget::Enable(w) => w.height(),
         }
     }
@@ -81,7 +79,6 @@ impl FormField {
                 changed
             }
             FormWidget::Select(w) => w.handle_key(key),
-            FormWidget::Checkbox(w) => w.handle_key(key),
             FormWidget::Enable(w) => w.handle_key(key),
         }
     }
@@ -92,7 +89,6 @@ impl FormField {
             FormWidget::Password { w, .. } => w.render(f, area, focused),
             FormWidget::TextArea { w, .. } => w.render(f, area, focused),
             FormWidget::Select(w) => w.render(f, area, focused),
-            FormWidget::Checkbox(w) => w.render(f, area, focused),
             FormWidget::Enable(w) => w.render(f, area, focused),
         }
     }
@@ -126,7 +122,6 @@ impl FormField {
                 Some(scalar_string(&w.text(), vt))
             }
             (FormWidget::Select(w), vt) => w.value().map(|v| scalar_string(v, vt)),
-            (FormWidget::Checkbox(w), _) => w.value.map(Value::Bool),
             (FormWidget::Enable(w), _) => w.value.map(Value::Bool),
             _ => None,
         }
@@ -323,9 +318,6 @@ fn build_field(schema: &SchemaField, data: &Mapping) -> Result<FormField> {
                 sel = sel.unset();
             }
             FormWidget::Select(sel)
-        }
-        SchemaWidget::Checkbox => {
-            FormWidget::Checkbox(Checkbox::new(label, bool_value(raw, &schema.default)))
         }
         SchemaWidget::Enable { on, off } => {
             let on = on.clone().unwrap_or_else(|| "enabled".into());

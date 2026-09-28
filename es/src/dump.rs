@@ -69,7 +69,6 @@ fn fmt_widget(w: &Widget) -> String {
                 .collect();
             format!("select[{}]", opts.join(" | "))
         }
-        Widget::Checkbox => "checkbox".into(),
         Widget::Enable { on, off } => {
             let on = on.as_deref().unwrap_or("enabled");
             let off = off.as_deref().unwrap_or("disabled");

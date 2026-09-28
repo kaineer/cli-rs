@@ -18,7 +18,7 @@ use ratatui::widgets::{
 use ratatui::{backend::CrosstermBackend, Terminal};
 
 use crate::widgets::{
-    Checkbox, Enable, Password, Select, SelectOption, Text, TextArea,
+    Enable, Password, Select, SelectOption, Text, TextArea,
 };
 
 enum Field {
@@ -26,7 +26,6 @@ enum Field {
     Password(Password),
     TextArea(TextArea),
     Select(Select),
-    Checkbox(Checkbox),
     Enable(Enable),
 }
 
@@ -37,7 +36,6 @@ impl Field {
             Field::Password(w) => w.height(),
             Field::TextArea(w) => w.height(),
             Field::Select(w) => w.height(),
-            Field::Checkbox(w) => w.height(),
             Field::Enable(w) => w.height(),
         }
     }
@@ -48,7 +46,6 @@ impl Field {
             Field::Password(w) => w.handle_key(key),
             Field::TextArea(w) => w.handle_key(key),
             Field::Select(w) => w.handle_key(key),
-            Field::Checkbox(w) => w.handle_key(key),
             Field::Enable(w) => w.handle_key(key),
         }
     }
@@ -59,7 +56,6 @@ impl Field {
             Field::Password(w) => w.render(f, area, focused),
             Field::TextArea(w) => w.render(f, area, focused),
             Field::Select(w) => w.render(f, area, focused),
-            Field::Checkbox(w) => w.render(f, area, focused),
             Field::Enable(w) => w.render(f, area, focused),
         }
     }
@@ -91,7 +87,6 @@ impl Field {
                 format!("textarea={:?}", w.text().replace('\n', "\\n"))
             }
             Field::Select(w) => format!("select={:?}", w.value().unwrap_or("")),
-            Field::Checkbox(w) => format!("checkbox={:?}", w.value),
             Field::Enable(w) => format!("enable={:?}", w.value),
         }
     }
@@ -145,13 +140,12 @@ impl App {
                     ],
                     0,
                 )),
-                Field::Checkbox(Checkbox::new("checkbox", Some(false))),
                 Field::Enable(Enable::new("enable", Some(true), "enabled", "disabled")),
                 Field::Enable(Enable::new("enable (ru)", None, "вкл", "выкл")),
                 // Extra fields so scroll is easy to notice in a tall terminal.
                 Field::Text(Text::new("extra text", "")),
-                Field::Checkbox(Checkbox::new("extra checkbox", None)),
                 Field::Enable(Enable::new("extra enable", Some(false), "on", "off")),
+                Field::Enable(Enable::new("extra enable 2", None, "yes", "no")),
             ],
             focus: 0,
             scroll: 0,

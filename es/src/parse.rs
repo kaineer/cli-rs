@@ -30,7 +30,6 @@ pub enum Widget {
     Select {
         options: Vec<SelectOption>,
     },
-    Checkbox,
     /// Bool с подписями enabled/disabled (кастомизируемыми).
     Enable {
         on: Option<String>,
@@ -126,34 +125,21 @@ fn parse_leaf(key: &str, dsl: &str) -> Result<Field> {
         bail!("пустое описание поля");
     }
 
-    // `boolean` ≡ `boolean:widget=checkbox`
-    if dsl == "boolean" {
-        return Ok(Field {
-            key: key.to_string(),
-            value_type: ValueType::Boolean,
-            widget: Widget::Checkbox,
-            default: None,
-            label: None,
-        });
-    }
-
     let (type_part, params_part) = match dsl.split_once(':') {
         Some((t, p)) => (t.trim(), p.trim()),
-        None => bail!("ожидалось `value_type:params` или `boolean`, получено `{dsl}`"),
+        None => (dsl, ""),
     };
 
-    if type_part.is_empty() || params_part.is_empty() {
+    if type_part.is_empty() {
         bail!("неполное описание поля `{dsl}`");
     }
 
     let value_type = parse_value_type(type_part);
-    let params = parse_params(params_part)?;
-
-    let widget_name = params
-        .iter()
-        .find(|(k, _)| k == "widget")
-        .map(|(_, v)| v.as_str())
-        .ok_or_else(|| anyhow::anyhow!("нет обязательного параметра widget"))?;
+    let params = if params_part.is_empty() {
+        Vec::new()
+    } else {
+        parse_params(params_part)?
+    };
 
     let height = params
         .iter()
@@ -162,7 +148,16 @@ fn parse_leaf(key: &str, dsl: &str) -> Result<Field> {
         .transpose()
         .context("height должен быть числом")?;
 
-    let widget = parse_widget(widget_name, height, &params)?;
+    let widget = match params
+        .iter()
+        .find(|(k, _)| k == "widget")
+        .map(|(_, v)| v.as_str())
+    {
+        Some(name) => parse_widget(name, height, &params)?,
+        None => default_widget(&value_type, &params).with_context(|| {
+            format!("нет параметра widget (для `{type_part}` нет виджета по умолчанию)")
+        })?,
+    };
 
     let default = params
         .iter()
@@ -180,6 +175,25 @@ fn parse_leaf(key: &str, dsl: &str) -> Result<Field> {
         default,
         label,
     })
+}
+
+/// Если `widget=` не указан: `boolean` → enable, `string` → text.
+fn default_widget(value_type: &ValueType, params: &[(String, String)]) -> Option<Widget> {
+    match value_type {
+        ValueType::Boolean => {
+            let on = params
+                .iter()
+                .find(|(k, _)| k == "on")
+                .map(|(_, v)| v.clone());
+            let off = params
+                .iter()
+                .find(|(k, _)| k == "off")
+                .map(|(_, v)| v.clone());
+            Some(Widget::Enable { on, off })
+        }
+        ValueType::String => Some(Widget::Text),
+        _ => None,
+    }
 }
 
 fn parse_value_type(s: &str) -> ValueType {
@@ -226,7 +240,6 @@ fn parse_widget(name: &str, height: Option<u32>, params: &[(String, String)]) ->
             Ok(Widget::Password { empty, filled })
         }
         "textarea" => Ok(Widget::Textarea { height }),
-        "checkbox" => Ok(Widget::Checkbox),
         "enable" => {
             let on = params
                 .iter()
@@ -280,26 +293,42 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_text_and_boolean() {
+    fn parse_defaults_without_widget() {
         let schema = parse_str(
             r#"
-name: string:widget=text,default=John,label=Имя
+name: string:default=John,label=Имя
+title: string
 present: boolean
+feature_ru: boolean:on=вкл,off=выкл
 "#,
         )
         .unwrap();
-        assert_eq!(schema.fields.len(), 2);
+        assert_eq!(schema.fields.len(), 4);
         assert_eq!(schema.fields[0].key, "name");
         assert_eq!(schema.fields[0].value_type, ValueType::String);
         assert_eq!(schema.fields[0].widget, Widget::Text);
         assert_eq!(schema.fields[0].default.as_deref(), Some("John"));
         assert_eq!(schema.fields[0].label.as_deref(), Some("Имя"));
-        assert_eq!(schema.fields[1].widget, Widget::Checkbox);
-        assert_eq!(schema.fields[1].value_type, ValueType::Boolean);
+        assert_eq!(schema.fields[1].widget, Widget::Text);
+        assert_eq!(
+            schema.fields[2].widget,
+            Widget::Enable {
+                on: None,
+                off: None
+            }
+        );
+        assert_eq!(schema.fields[2].value_type, ValueType::Boolean);
+        assert_eq!(
+            schema.fields[3].widget,
+            Widget::Enable {
+                on: Some("вкл".into()),
+                off: Some("выкл".into())
+            }
+        );
     }
 
     #[test]
-    fn parse_enable() {
+    fn parse_enable_explicit() {
         let schema = parse_str(
             r#"
 feature: boolean:widget=enable
