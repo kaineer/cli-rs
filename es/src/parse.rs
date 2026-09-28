@@ -24,11 +24,18 @@ pub enum Widget {
         empty: Option<String>,
         filled: Option<String>,
     },
-    Textarea { height: Option<u32> },
-    Select { options: Vec<SelectOption> },
+    Textarea {
+        height: Option<u32>,
+    },
+    Select {
+        options: Vec<SelectOption>,
+    },
     Checkbox,
     /// Bool с подписями enabled/disabled (кастомизируемыми).
-    Enable { on: Option<String>, off: Option<String> },
+    Enable {
+        on: Option<String>,
+        off: Option<String>,
+    },
     /// Неизвестный виджет.
     Other(String),
 }
@@ -73,7 +80,7 @@ pub fn parse_file(path: &Path) -> Result<Schema> {
 pub fn parse_str(text: &str) -> Result<Schema> {
     let root: Value = serde_yaml::from_str(text).context("невалидный YAML")?;
     let Value::Mapping(map) = root else {
-        bail!("корень схемы должен быть YAML-мапой");
+        bail!("корень схемы должен быть YAML-объектом");
     };
 
     let mut fields = Vec::new();
@@ -204,11 +211,7 @@ fn parse_params(s: &str) -> Result<Vec<(String, String)>> {
     Ok(out)
 }
 
-fn parse_widget(
-    name: &str,
-    height: Option<u32>,
-    params: &[(String, String)],
-) -> Result<Widget> {
+fn parse_widget(name: &str, height: Option<u32>, params: &[(String, String)]) -> Result<Widget> {
     match name {
         "text" => Ok(Widget::Text),
         "password" => {
