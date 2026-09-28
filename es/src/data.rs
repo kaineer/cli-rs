@@ -12,7 +12,9 @@ use serde_yaml::{Mapping, Value};
 pub enum DataFormat {
     Yaml,
     /// Shell-скрипт: исходный текст сохраняется, правятся только простые `export KEY=…`.
-    Shell { source: String },
+    Shell {
+        source: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -78,7 +80,7 @@ pub fn parse_text(text: &str) -> Result<LoadedData> {
         Value::Mapping(m) => m,
         Value::Null => Mapping::new(),
         other => bail!(
-            "корень input должен быть YAML-мапой, получено {}",
+            "корень input должен быть YAML-объектом, получено {}",
             type_name(&other)
         ),
     };
@@ -133,8 +135,8 @@ fn parse_shell_map(text: &str) -> Result<Mapping> {
         let Some((_, key, raw_value)) = parse_simple_export(line) else {
             continue;
         };
-        let value = unquote_shell_value(raw_value)
-            .with_context(|| format!("строка {}", lineno + 1))?;
+        let value =
+            unquote_shell_value(raw_value).with_context(|| format!("строка {}", lineno + 1))?;
         map.insert(Value::String(key.to_string()), infer_scalar(&value));
     }
     Ok(map)
@@ -235,7 +237,8 @@ fn shell_quote(s: &str) -> String {
         return "\"\"".to_string();
     }
     if s.chars().all(|c| {
-        c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '/' | ':' | '@' | '%' | '+' | '=')
+        c.is_ascii_alphanumeric()
+            || matches!(c, '_' | '-' | '.' | '/' | ':' | '@' | '%' | '+' | '=')
     }) {
         return s.to_string();
     }
