@@ -20,9 +20,7 @@ use serde_yaml::{Mapping, Value};
 use crate::data::{self, DataFormat};
 use crate::io_args::IoArgs;
 use crate::parse::{self, Field as SchemaField, Schema, ValueType, Widget as SchemaWidget};
-use crate::widgets::{
-    Button, Enable, Password, Select, SelectOption, Text, TextArea,
-};
+use crate::widgets::{Button, Enable, Password, Select, SelectOption, Text, TextArea};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Focus {
@@ -266,10 +264,7 @@ impl App {
 }
 
 fn build_field(schema: &SchemaField, data: &Mapping) -> Result<FormField> {
-    let label = schema
-        .label
-        .clone()
-        .unwrap_or_else(|| schema.key.clone());
+    let label = schema.label.clone().unwrap_or_else(|| schema.key.clone());
     let key_v = Value::String(schema.key.clone());
     let raw = data.get(&key_v);
     let in_data = raw.is_some();
@@ -306,8 +301,14 @@ fn build_field(schema: &SchemaField, data: &Mapping) -> Result<FormField> {
                 })
                 .collect();
             let mut sel = Select::new(label, opts, 0);
-            if let Some(v) = raw.and_then(value_as_string).or_else(|| schema.default.clone()) {
-                if let Some(idx) = sel.options.iter().position(|o| o.value == v || o.label == v)
+            if let Some(v) = raw
+                .and_then(value_as_string)
+                .or_else(|| schema.default.clone())
+            {
+                if let Some(idx) = sel
+                    .options
+                    .iter()
+                    .position(|o| o.value == v || o.label == v)
                 {
                     sel.selected = idx;
                     sel.set = true;
@@ -447,6 +448,10 @@ fn handle_key(
             app.should_quit = true;
             return Ok(());
         }
+        (KeyCode::Char('w'), KeyModifiers::CONTROL) => {
+            app.save()?;
+            return Ok(());
+        }
         (KeyCode::Esc, _) if !editing => {
             app.should_quit = true;
             return Ok(());
@@ -519,7 +524,7 @@ fn draw(f: &mut Frame, app: &mut App) {
     } else {
         f.render_widget(
             Paragraph::new(Line::from(Span::styled(
-                " edit — j/k or Tab · Enter edit · Esc discard · Space Save",
+                " edit — j/k or Tab · Enter edit · Ctrl+Q discard · Ctrl+W save",
                 Style::default().fg(Color::Cyan),
             ))),
             chunks[0],
@@ -578,8 +583,7 @@ fn draw(f: &mut Frame, app: &mut App) {
         .direction(Direction::Horizontal)
         .constraints([Constraint::Length(10), Constraint::Min(0)])
         .split(btn_area);
-    app.save_btn
-        .render(f, btn_row[0], app.focus == Focus::Save);
+    app.save_btn.render(f, btn_row[0], app.focus == Focus::Save);
 
     let status = if app.status.is_empty() {
         format!(" output: {}", app.output.display())
