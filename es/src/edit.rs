@@ -205,6 +205,7 @@ impl App {
         }
         self.focus = match self.focus {
             Focus::Field(i) if i + 1 < self.fields.len() => Focus::Field(i + 1),
+            Focus::Field(_) if self.silent => Focus::Field(0),
             Focus::Field(_) => Focus::Save,
             Focus::Save => Focus::Field(0),
         };
@@ -215,6 +216,7 @@ impl App {
             self.fields[i].end_editing();
         }
         self.focus = match self.focus {
+            Focus::Field(0) if self.silent => Focus::Field(self.fields.len() - 1),
             Focus::Field(0) => Focus::Save,
             Focus::Field(i) => Focus::Field(i - 1),
             Focus::Save => Focus::Field(self.fields.len() - 1),
@@ -421,7 +423,10 @@ fn loop_ui(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App)
         match event::read()? {
             Event::Key(key) if key.kind == KeyEventKind::Press => {
                 let size = terminal.size()?;
-                let chrome = if app.silent { 1 + 1 } else { 1 + 1 + 1 };
+                let help_h = if app.silent { 0 } else { 1 };
+                let save_h = if app.silent { 0 } else { 1 };
+                let status_h = 1;
+                let chrome = help_h + save_h + status_h;
                 let viewport_h = size.height.saturating_sub(chrome);
                 let (_, total_h) = field_layout(&app.fields);
                 if let Err(e) = handle_key(app, key, viewport_h, total_h) {
@@ -501,11 +506,7 @@ fn draw(f: &mut Frame, app: &mut App) {
     let chunks = if app.silent {
         Layout::default()
             .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Min(1),
-                Constraint::Length(1),
-                Constraint::Length(1),
-            ])
+            .constraints([Constraint::Min(1), Constraint::Length(1)])
             .split(area)
     } else {
         Layout::default()
@@ -519,8 +520,8 @@ fn draw(f: &mut Frame, app: &mut App) {
             .split(area)
     };
 
-    let (form_area, btn_area, status_area) = if app.silent {
-        (chunks[0], chunks[1], chunks[2])
+    let (form_area, status_area) = if app.silent {
+        (chunks[0], chunks[1])
     } else {
         f.render_widget(
             Paragraph::new(Line::from(Span::styled(
@@ -529,7 +530,7 @@ fn draw(f: &mut Frame, app: &mut App) {
             ))),
             chunks[0],
         );
-        (chunks[1], chunks[2], chunks[3])
+        (chunks[1], chunks[3])
     };
 
     let (offsets, total_h) = field_layout(&app.fields);
@@ -579,11 +580,15 @@ fn draw(f: &mut Frame, app: &mut App) {
         );
     }
 
-    let btn_row = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(10), Constraint::Min(0)])
-        .split(btn_area);
-    app.save_btn.render(f, btn_row[0], app.focus == Focus::Save);
+    if !app.silent {
+        let btn_area = chunks[2];
+        let btn_row = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Length(10), Constraint::Min(0)])
+            .split(btn_area);
+        app.save_btn
+            .render(f, btn_row[0], app.focus == Focus::Save);
+    }
 
     let status = if app.status.is_empty() {
         format!(" output: {}", app.output.display())
