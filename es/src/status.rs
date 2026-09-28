@@ -1,11 +1,9 @@
 //! `es status` — show scheme/input resolution without opening the editor.
 
-use std::fs;
-use std::path::Path;
-
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use serde_yaml::{Mapping, Value};
 
+use crate::data::{self, DataFormat};
 use crate::io_args::IoArgs;
 use crate::parse::{self, Schema};
 
@@ -15,48 +13,12 @@ pub fn run(args: IoArgs) -> Result<()> {
     }
 
     let schema = parse::parse_file(&args.scheme)?;
-    let data = load_input(&args.input)?;
-    print_status(&args, &schema, &data);
+    let loaded = data::load(&args.input)?;
+    print_status(&args, &schema, &loaded.map, &loaded.format);
     Ok(())
 }
 
-fn load_input(path: &Path) -> Result<Mapping> {
-    if !path.exists() {
-        return Ok(Mapping::new());
-    }
-    if !path.is_file() {
-        bail!("input не файл: {}", path.display());
-    }
-    let text = fs::read_to_string(path)
-        .with_context(|| format!("не удалось прочитать {}", path.display()))?;
-    if text.trim().is_empty() {
-        return Ok(Mapping::new());
-    }
-    let root: Value = serde_yaml::from_str(&text)
-        .with_context(|| format!("невалидный YAML в {}", path.display()))?;
-    match root {
-        Value::Mapping(m) => Ok(m),
-        Value::Null => Ok(Mapping::new()),
-        other => bail!(
-            "корень input должен быть YAML-мапой, получено {}",
-            type_name(&other)
-        ),
-    }
-}
-
-fn type_name(v: &Value) -> &'static str {
-    match v {
-        Value::Null => "null",
-        Value::Bool(_) => "bool",
-        Value::Number(_) => "number",
-        Value::String(_) => "string",
-        Value::Sequence(_) => "sequence",
-        Value::Mapping(_) => "mapping",
-        Value::Tagged(_) => "tagged",
-    }
-}
-
-fn print_status(args: &IoArgs, schema: &Schema, data: &Mapping) {
+fn print_status(args: &IoArgs, schema: &Schema, data: &Mapping, format: &DataFormat) {
     println!("status");
     println!("  scheme:  {}", args.scheme.display());
     println!("  input:   {}", args.input.display());
@@ -69,6 +31,7 @@ fn print_status(args: &IoArgs, schema: &Schema, data: &Mapping) {
             ""
         }
     );
+    println!("  format:  {}", format_label(format));
     println!(
         "  fields:  {} (skipped: {})",
         schema.fields.len(),
@@ -82,5 +45,12 @@ fn print_status(args: &IoArgs, schema: &Schema, data: &Mapping) {
             f.key,
             if present { "(in input)" } else { "(missing)" }
         );
+    }
+}
+
+fn format_label(format: &DataFormat) -> &'static str {
+    match format {
+        DataFormat::Yaml => "yaml",
+        DataFormat::Shell { .. } => "shell (export)",
     }
 }

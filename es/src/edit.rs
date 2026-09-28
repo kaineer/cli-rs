@@ -1,8 +1,7 @@
 //! `es edit` — TUI form editor driven by a schema.
 
-use std::fs;
 use std::io::{self, stdout};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
@@ -18,6 +17,7 @@ use ratatui::widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarStat
 use ratatui::{backend::CrosstermBackend, Frame, Terminal};
 use serde_yaml::{Mapping, Value};
 
+use crate::data::{self, DataFormat};
 use crate::io_args::IoArgs;
 use crate::parse::{self, Field as SchemaField, Schema, ValueType, Widget as SchemaWidget};
 use crate::widgets::{
@@ -169,6 +169,7 @@ struct App {
     scroll: u16,
     save_btn: Button,
     output: PathBuf,
+    format: DataFormat,
     silent: bool,
     should_quit: bool,
     saved: bool,
@@ -176,7 +177,13 @@ struct App {
 }
 
 impl App {
-    fn from_schema(schema: &Schema, data: &Mapping, output: PathBuf, silent: bool) -> Result<Self> {
+    fn from_schema(
+        schema: &Schema,
+        data: &Mapping,
+        output: PathBuf,
+        format: DataFormat,
+        silent: bool,
+    ) -> Result<Self> {
         if schema.fields.is_empty() {
             bail!("в схеме нет полей для редактирования");
         }
@@ -191,6 +198,7 @@ impl App {
             scroll: 0,
             save_btn: Button::new("Save"),
             output,
+            format,
             silent,
             should_quit: false,
             saved: false,
@@ -249,20 +257,13 @@ impl App {
 
     fn save(&mut self) -> Result<()> {
         let mut map = Mapping::new();
+        let managed: Vec<String> = self.fields.iter().map(|f| f.key.clone()).collect();
         for field in &self.fields {
             if let Some(v) = field.to_yaml() {
                 map.insert(Value::String(field.key.clone()), v);
             }
         }
-        let text = serde_yaml::to_string(&Value::Mapping(map)).context("сериализация YAML")?;
-        if let Some(parent) = self.output.parent() {
-            if !parent.as_os_str().is_empty() {
-                fs::create_dir_all(parent)
-                    .with_context(|| format!("не удалось создать {}", parent.display()))?;
-            }
-        }
-        fs::write(&self.output, text)
-            .with_context(|| format!("не удалось записать {}", self.output.display()))?;
+        data::save(&self.output, &map, &self.format, &managed)?;
         self.saved = true;
         self.should_quit = true;
         Ok(())
@@ -383,33 +384,12 @@ fn value_as_string(v: &Value) -> Option<String> {
     }
 }
 
-fn load_input(path: &Path) -> Result<Mapping> {
-    if !path.exists() {
-        return Ok(Mapping::new());
-    }
-    if !path.is_file() {
-        bail!("input не файл: {}", path.display());
-    }
-    let text = fs::read_to_string(path)
-        .with_context(|| format!("не удалось прочитать {}", path.display()))?;
-    if text.trim().is_empty() {
-        return Ok(Mapping::new());
-    }
-    let root: Value = serde_yaml::from_str(&text)
-        .with_context(|| format!("невалидный YAML в {}", path.display()))?;
-    match root {
-        Value::Mapping(m) => Ok(m),
-        Value::Null => Ok(Mapping::new()),
-        _ => bail!("корень input должен быть YAML-мапой"),
-    }
-}
-
 pub fn run(args: IoArgs) -> Result<()> {
     if !args.scheme.is_file() {
         bail!("схема не найдена: {}", args.scheme.display());
     }
     let schema = parse::parse_file(&args.scheme)?;
-    let data = load_input(&args.input)?;
+    let loaded = data::load(&args.input)?;
 
     enable_raw_mode().context("enable raw mode")?;
     let mut out = stdout();
@@ -417,7 +397,13 @@ pub fn run(args: IoArgs) -> Result<()> {
     let backend = CrosstermBackend::new(out);
     let mut terminal = Terminal::new(backend).context("create terminal")?;
 
-    let mut app = App::from_schema(&schema, &data, args.output.clone(), args.silent)?;
+    let mut app = App::from_schema(
+        &schema,
+        &loaded.map,
+        args.output.clone(),
+        loaded.format,
+        args.silent,
+    )?;
     let result = loop_ui(&mut terminal, &mut app);
 
     disable_raw_mode().ok();

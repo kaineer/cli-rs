@@ -1,5 +1,6 @@
 // es — YAML schema parser / TUI editor (WIP)
 
+mod data;
 mod dump;
 mod edit;
 mod io_args;
