@@ -1,0 +1,10 @@
+[package]
+name = "smartlist"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ratatui = "0.26"           # TUI framework
+crossterm = "0.27"         # Терминальный бэкенд
+tokio = { version = "1", features = ["full"] } # Асинхронность для запуска скриптаdependencies
+atty = "0.2"

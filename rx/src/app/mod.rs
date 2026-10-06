@@ -177,6 +177,92 @@ impl App {
         }
     }
 
+    /// Индекс запуска в списке `runs_for_selected()` по строке терминала `row`.
+    /// Учитывает переменную высоту блоков так же, как `ui::draw_right`.
+    fn right_list_index_at_row(&self, row: u16) -> Option<usize> {
+        if row < self.right_panel_rect.y {
+            return None;
+        }
+        let rel = (row - self.right_panel_rect.y) as usize;
+        if rel >= self.right_panel_rect.height as usize {
+            return None;
+        }
+        let run_idxs = self.runs_for_selected();
+        if run_idxs.is_empty() {
+            return None;
+        }
+
+        let sel = self
+            .right_state
+            .selected()
+            .unwrap_or(0)
+            .min(run_idxs.len() - 1);
+        let in_body = self.in_body_mode();
+        let max_rows = self.right_panel_rect.height as usize;
+        let first = self.right_first_visible.min(run_idxs.len() - 1);
+
+        let mut visual_row = 0usize;
+        for (offset, &run_id) in run_idxs.iter().enumerate().skip(first) {
+            let run = &self.runs[run_id];
+            let is_selected = offset == sel;
+            let effective_view = if in_body && !is_selected {
+                RunView::Collapsed
+            } else {
+                self.run_views[run_id].view
+            };
+
+            let block_start = visual_row;
+            visual_row += 1; // header
+            if visual_row > max_rows {
+                break;
+            }
+            if rel < visual_row {
+                return Some(offset);
+            }
+
+            let total = run.body_lines().len();
+            let body_rows = match effective_view {
+                RunView::Collapsed => 0,
+                RunView::Preview => total.min(PREVIEW_LINES),
+                RunView::Full => total,
+            };
+
+            if body_rows > 0 {
+                let vs = self.run_views[run_id];
+                let all_len = total;
+                let start = vs.scroll.min(all_len);
+                let end = (start + body_rows).min(all_len);
+                let shown_body = end.saturating_sub(start);
+                visual_row += shown_body;
+                if visual_row > max_rows {
+                    if rel >= block_start && rel < max_rows.min(visual_row) {
+                        return Some(offset);
+                    }
+                    break;
+                }
+                if rel < visual_row {
+                    return Some(offset);
+                }
+
+                if effective_view == RunView::Preview && visual_row < max_rows {
+                    let shown = body_rows;
+                    let rest = total.saturating_sub(shown);
+                    if rest > 0 {
+                        visual_row += 1;
+                        if rel < visual_row {
+                            return Some(offset);
+                        }
+                    }
+                }
+            }
+
+            if visual_row >= max_rows {
+                break;
+            }
+        }
+        None
+    }
+
     /// Левый клик по правой панели: переключить фокус вправо и (в режиме List)
     /// выделить запуск по строке.
     pub fn on_right_panel_click(&mut self, row: u16) {
@@ -186,20 +272,22 @@ impl App {
         if self.right_mode() != RightMode::List {
             return;
         }
-        let run_idxs = self.runs_for_selected();
-        if run_idxs.is_empty() {
-            return;
-        }
-        if row < self.right_panel_rect.y {
-            return;
-        }
-        let rel = (row - self.right_panel_rect.y) as usize;
-        if rel >= self.right_panel_rect.height as usize {
-            return;
-        }
-        let idx = self.right_first_visible + rel;
-        if idx < run_idxs.len() {
+        if let Some(idx) = self.right_list_index_at_row(row) {
             self.right_state.select(Some(idx));
+        }
+    }
+
+    /// Правый клик по правой панели: выделить запуск по строке;
+    /// если клик по уже выделенному — цикл раскрытия, как Space.
+    pub fn on_right_panel_right_click(&mut self, row: u16) {
+        self.focus = Panel::Right;
+        let Some(idx) = self.right_list_index_at_row(row) else {
+            return;
+        };
+        let was_selected = self.right_state.selected() == Some(idx);
+        self.right_state.select(Some(idx));
+        if was_selected {
+            self.right_toggle_view();
         }
     }
 
