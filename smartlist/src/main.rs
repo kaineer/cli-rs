@@ -16,6 +16,24 @@ use app::App;
 use handlers::key::handle_key;
 use ui::render;
 
+fn usage(program: &str) -> String {
+    format!(
+        "\
+Использование: {program} [-d] [-q|--query <запрос>] <скрипт>
+
+  <скрипт>     скрипт, который нужно использовать, чтобы получить список для выбора
+  -d           отладочный вывод и дополнительный TUI
+  -q, --query  первое значение ввода
+  --help       показать это сообщение
+"
+    )
+}
+
+fn exit_with_usage(program: &str) -> ! {
+    eprint!("{}", usage(program));
+    std::process::exit(1);
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Получаем аргументы командной строки
@@ -39,16 +57,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     i += 2;
                 } else {
                     eprintln!("Error: -q/--query requires a value");
-                    std::process::exit(1);
+                    exit_with_usage(&args[0]);
                 }
+            }
+            "--help" => {
+                print!("{}", usage(&args[0]));
+                std::process::exit(0);
             }
             _ => {
                 if script_name.is_none() {
                     script_name = Some(args[i].clone());
                     i += 1;
                 } else {
-                    eprintln!("Usage: {} [-d] <script_path>", args[0]);
-                    std::process::exit(1);
+                    exit_with_usage(&args[0]);
                 }
             }
         }
@@ -56,10 +77,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let script_name = match script_name {
         Some(name) => name,
-        None => {
-            eprintln!("Usage: {} [-d] <script_path>", args[0]);
-            std::process::exit(1);
-        }
+        None => exit_with_usage(&args[0]),
     };
 
     // Проверяем, доступен ли TUI (должен быть терминал для stderr)
