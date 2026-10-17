@@ -52,6 +52,19 @@ impl ProcessPool {
         self.running.iter().any(|rp| rp.entry_idx == entry_idx)
     }
 
+    /// Переносит `entry_idx` активных процессов по карте `старый → новый`.
+    /// Процесс, чей пункт исчез из меню, получает `usize::MAX` и больше
+    /// не привязан ни к одному элементу.
+    pub fn remap_entries(&mut self, old_to_new: &[Option<usize>]) {
+        for rp in &mut self.running {
+            rp.entry_idx = old_to_new
+                .get(rp.entry_idx)
+                .copied()
+                .flatten()
+                .unwrap_or(usize::MAX);
+        }
+    }
+
     /// Запускает `sh -c <cmd>` и подписывается на stdout/stderr.
     pub fn spawn(&mut self, entry_idx: usize, cmd: &str) -> std::io::Result<()> {
         let mut cmd_builder = Command::new("sh");

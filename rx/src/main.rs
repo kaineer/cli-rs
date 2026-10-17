@@ -31,7 +31,7 @@ fn main() -> Result<()> {
     let backend = CrosstermBackend::new(out);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut app = App::new(entries);
+    let mut app = App::new(path, entries);
     let res = run::run(&mut terminal, &mut app);
 
     disable_raw_mode()?;

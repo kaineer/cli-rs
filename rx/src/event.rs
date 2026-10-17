@@ -22,6 +22,8 @@ fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
     match (code, modifiers) {
         (KeyCode::Char('q'), _) | (KeyCode::Esc, _) => app.quit(),
 
+        (KeyCode::Char('r'), _) | (KeyCode::Char('R'), _) => app.reload_menu(),
+
         (KeyCode::Tab, _) | (KeyCode::BackTab, _) => app.toggle_focus(),
 
         // j / Down
@@ -82,12 +84,17 @@ fn handle_mouse(app: &mut App, mouse: crossterm::event::MouseEvent) {
             }
         }
         MouseEventKind::Down(MouseButton::Right) => {
-            // Правый клик по элементу левого списка = «выделить + запустить».
             if app
                 .left_panel_rect
                 .contains((mouse.column, mouse.row).into())
             {
+                // Правый клик по элементу левого списка = «выделить + запустить».
                 app.on_left_panel_right_click(mouse.row);
+            } else if app
+                .right_panel_rect
+                .contains((mouse.column, mouse.row).into())
+            {
+                app.on_right_panel_right_click(mouse.row);
             }
         }
         MouseEventKind::Drag(MouseButton::Left) if app.dragging => {

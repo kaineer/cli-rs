@@ -303,7 +303,7 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
         Panel::Right => "[RIGHT]",
     };
     let base = if app.status.is_empty() {
-        "↑/↓ — навигация, Space — раскрыть, Tab — фокус, q — выход".to_string()
+        "↑/↓ — навигация, Space — раскрыть, Tab — фокус, r — перечитать, q — выход".to_string()
     } else {
         app.status.clone()
     };

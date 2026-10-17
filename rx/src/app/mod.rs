@@ -1,10 +1,12 @@
 pub mod process;
 pub mod view;
 
+use std::path::PathBuf;
+
 use ratatui::layout::Rect;
 use ratatui::widgets::ListState;
 
-use crate::config::MenuEntry;
+use crate::config::{load_entries, MenuEntry};
 use crate::run_record::RunRecord;
 
 pub use process::FinishedRun;
@@ -36,6 +38,7 @@ pub enum EntryState {
 }
 
 pub struct App {
+    menu_path: PathBuf,
     pub entries: Vec<MenuEntry>,
     pub states: Vec<EntryState>,
     pub list_state: ListState,
@@ -66,13 +69,14 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(entries: Vec<MenuEntry>) -> Self {
+    pub fn new(menu_path: PathBuf, entries: Vec<MenuEntry>) -> Self {
         let states = entries.iter().map(|_| EntryState::Idle).collect();
         let mut list_state = ListState::default();
         if !entries.is_empty() {
             list_state.select(Some(0));
         }
         Self {
+            menu_path,
             entries,
             states,
             list_state,
@@ -177,6 +181,92 @@ impl App {
         }
     }
 
+    /// Индекс запуска в списке `runs_for_selected()` по строке терминала `row`.
+    /// Учитывает переменную высоту блоков так же, как `ui::draw_right`.
+    fn right_list_index_at_row(&self, row: u16) -> Option<usize> {
+        if row < self.right_panel_rect.y {
+            return None;
+        }
+        let rel = (row - self.right_panel_rect.y) as usize;
+        if rel >= self.right_panel_rect.height as usize {
+            return None;
+        }
+        let run_idxs = self.runs_for_selected();
+        if run_idxs.is_empty() {
+            return None;
+        }
+
+        let sel = self
+            .right_state
+            .selected()
+            .unwrap_or(0)
+            .min(run_idxs.len() - 1);
+        let in_body = self.in_body_mode();
+        let max_rows = self.right_panel_rect.height as usize;
+        let first = self.right_first_visible.min(run_idxs.len() - 1);
+
+        let mut visual_row = 0usize;
+        for (offset, &run_id) in run_idxs.iter().enumerate().skip(first) {
+            let run = &self.runs[run_id];
+            let is_selected = offset == sel;
+            let effective_view = if in_body && !is_selected {
+                RunView::Collapsed
+            } else {
+                self.run_views[run_id].view
+            };
+
+            let block_start = visual_row;
+            visual_row += 1; // header
+            if visual_row > max_rows {
+                break;
+            }
+            if rel < visual_row {
+                return Some(offset);
+            }
+
+            let total = run.body_lines().len();
+            let body_rows = match effective_view {
+                RunView::Collapsed => 0,
+                RunView::Preview => total.min(PREVIEW_LINES),
+                RunView::Full => total,
+            };
+
+            if body_rows > 0 {
+                let vs = self.run_views[run_id];
+                let all_len = total;
+                let start = vs.scroll.min(all_len);
+                let end = (start + body_rows).min(all_len);
+                let shown_body = end.saturating_sub(start);
+                visual_row += shown_body;
+                if visual_row > max_rows {
+                    if rel >= block_start && rel < max_rows.min(visual_row) {
+                        return Some(offset);
+                    }
+                    break;
+                }
+                if rel < visual_row {
+                    return Some(offset);
+                }
+
+                if effective_view == RunView::Preview && visual_row < max_rows {
+                    let shown = body_rows;
+                    let rest = total.saturating_sub(shown);
+                    if rest > 0 {
+                        visual_row += 1;
+                        if rel < visual_row {
+                            return Some(offset);
+                        }
+                    }
+                }
+            }
+
+            if visual_row >= max_rows {
+                break;
+            }
+        }
+        None
+    }
+
     /// Левый клик по правой панели: переключить фокус вправо и (в режиме List)
     /// выделить запуск по строке.
     pub fn on_right_panel_click(&mut self, row: u16) {
@@ -186,20 +276,22 @@ impl App {
         if self.right_mode() != RightMode::List {
             return;
         }
-        let run_idxs = self.runs_for_selected();
-        if run_idxs.is_empty() {
-            return;
-        }
-        if row < self.right_panel_rect.y {
-            return;
-        }
-        let rel = (row - self.right_panel_rect.y) as usize;
-        if rel >= self.right_panel_rect.height as usize {
-            return;
-        }
-        let idx = self.right_first_visible + rel;
-        if idx < run_idxs.len() {
+        if let Some(idx) = self.right_list_index_at_row(row) {
             self.right_state.select(Some(idx));
+        }
+    }
+
+    /// Правый клик по правой панели: выделить запуск по строке;
+    /// если клик по уже выделенному — цикл раскрытия, как Space.
+    pub fn on_right_panel_right_click(&mut self, row: u16) {
+        self.focus = Panel::Right;
+        let Some(idx) = self.right_list_index_at_row(row) else {
+            return;
+        };
+        let was_selected = self.right_state.selected() == Some(idx);
+        self.right_state.select(Some(idx));
+        if was_selected {
+            self.right_toggle_view();
         }
     }
 
@@ -437,6 +529,66 @@ impl App {
         self.should_quit = true;
     }
 
+    /// Перечитывает файл меню и обновляет левый список.
+    /// Запуски и активные процессы остаются у пунктов с той же парой
+    /// (label, cmd). Пункт, которого больше нет, отвязывается.
+    pub fn reload_menu(&mut self) {
+        match load_entries(&self.menu_path) {
+            Ok(entries) => self.apply_reloaded(entries),
+            Err(err) => {
+                self.status = format!("Не удалось перечитать: {err}");
+            }
+        }
+    }
+
+    fn apply_reloaded(&mut self, new_entries: Vec<MenuEntry>) {
+        let old_sel = self.list_state.selected();
+        let mapping = match_entries(&self.entries, &new_entries);
+
+        let old_states = std::mem::take(&mut self.states);
+        let mut new_states: Vec<EntryState> =
+            (0..new_entries.len()).map(|_| EntryState::Idle).collect();
+        for (old_i, state) in old_states.into_iter().enumerate() {
+            if let Some(new_i) = mapping.get(old_i).copied().flatten() {
+                new_states[new_i] = state;
+            }
+        }
+        self.states = new_states;
+
+        for run in &mut self.runs {
+            run.entry_idx = mapping
+                .get(run.entry_idx)
+                .copied()
+                .flatten()
+                .unwrap_or(usize::MAX);
+        }
+        self.processes.remap_entries(&mapping);
+
+        let n = new_entries.len();
+        self.entries = new_entries;
+
+        match old_sel.and_then(|i| mapping.get(i).copied().flatten()) {
+            Some(i) => {
+                self.list_state.select(Some(i));
+            }
+            None if n > 0 => {
+                self.list_state.select(Some(0));
+                self.on_left_selection_changed();
+            }
+            None => {
+                self.list_state.select(None);
+                self.on_left_selection_changed();
+            }
+        }
+
+        let name = self
+            .menu_path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("меню");
+        self.status = format!("Перечитано {name}: {n} {}", plural_punkt(n));
+    }
+
     pub fn tick(&mut self) {
         self.tick = self.tick.wrapping_add(1);
 
@@ -456,14 +608,16 @@ impl App {
             self.runs.push(record);
             self.run_views.push(RunViewState::default());
             let run_id = self.runs.len() - 1;
-            self.states[f.entry_idx] = EntryState::Done { run_id };
-            self.status = format!(
-                "{} {}",
-                self.entries[f.entry_idx].label,
-                if f.ok { "ok" } else { "ошибка" },
-            );
-            if self.list_state.selected() == Some(f.entry_idx) {
-                self.on_left_selection_changed();
+            if f.entry_idx < self.states.len() {
+                self.states[f.entry_idx] = EntryState::Done { run_id };
+                self.status = format!(
+                    "{} {}",
+                    self.entries[f.entry_idx].label,
+                    if f.ok { "ok" } else { "ошибка" },
+                );
+                if self.list_state.selected() == Some(f.entry_idx) {
+                    self.on_left_selection_changed();
+                }
             }
         }
     }
@@ -503,5 +657,112 @@ impl App {
                 }
             }
         }
+    }
+}
+
+/// Старый индекс → новый, по паре (label, cmd). Одинаковые пункты
+/// сопоставляются по порядку, без повторного использования.
+fn match_entries(old: &[MenuEntry], new: &[MenuEntry]) -> Vec<Option<usize>> {
+    let mut used = vec![false; new.len()];
+    old.iter()
+        .map(|old_e| {
+            new.iter().enumerate().find_map(|(j, e)| {
+                if !used[j] && e.label == old_e.label && e.cmd == old_e.cmd {
+                    used[j] = true;
+                    Some(j)
+                } else {
+                    None
+                }
+            })
+        })
+        .collect()
+}
+
+fn plural_punkt(n: usize) -> &'static str {
+    let n10 = n % 10;
+    let n100 = n % 100;
+    if n10 == 1 && n100 != 11 {
+        "пункт"
+    } else if (2..=4).contains(&n10) && !(12..=14).contains(&n100) {
+        "пункта"
+    } else {
+        "пунктов"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(label: &str, cmd: &str) -> MenuEntry {
+        MenuEntry {
+            label: label.into(),
+            cmd: cmd.into(),
+        }
+    }
+
+    #[test]
+    fn match_keeps_identity_across_reorder() {
+        let old = vec![entry("a", "1"), entry("b", "2"), entry("c", "3")];
+        let new = vec![entry("c", "3"), entry("a", "1"), entry("d", "4")];
+        assert_eq!(match_entries(&old, &new), vec![Some(1), None, Some(0)]);
+    }
+
+    #[test]
+    fn match_duplicate_pairs_in_order() {
+        let old = vec![entry("a", "1"), entry("a", "2")];
+        let new = vec![entry("a", "2"), entry("a", "1")];
+        assert_eq!(match_entries(&old, &new), vec![Some(1), Some(0)]);
+    }
+
+    #[test]
+    fn reload_updates_list_and_follows_selection() {
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("rx-menu-reload-{}.yaml", std::process::id()));
+        std::fs::write(
+            &path,
+            "- cmd: echo a\n  label: a\n- cmd: echo b\n  label: b\n",
+        )
+        .unwrap();
+
+        let entries = load_entries(&path).unwrap();
+        let mut app = App::new(path.clone(), entries);
+        app.list_state.select(Some(1));
+        app.states[1] = EntryState::Done { run_id: 0 };
+        app.runs.push(RunRecord {
+            entry_idx: 1,
+            started_at: std::time::SystemTime::UNIX_EPOCH,
+            finished_at: std::time::SystemTime::UNIX_EPOCH,
+            duration: std::time::Duration::ZERO,
+            exit_code: Some(0),
+            signal: None,
+            ok: true,
+            stdout: "ok".into(),
+            stderr: String::new(),
+        });
+        app.run_views.push(RunViewState::default());
+
+        std::fs::write(
+            &path,
+            "- cmd: echo c\n  label: c\n- cmd: echo b\n  label: b\n- cmd: echo a\n  label: a\n",
+        )
+        .unwrap();
+        app.reload_menu();
+
+        assert_eq!(
+            app.entries
+                .iter()
+                .map(|e| e.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["c", "b", "a"]
+        );
+        assert_eq!(app.list_state.selected(), Some(1));
+        assert!(matches!(app.states[1], EntryState::Done { run_id: 0 }));
+        assert!(matches!(app.states[0], EntryState::Idle));
+        assert_eq!(app.runs[0].entry_idx, 1);
+        assert!(app.status.starts_with("Перечитано"));
+        assert!(app.status.contains("3 пункта"));
+
+        let _ = std::fs::remove_file(&path);
     }
 }
