@@ -14,7 +14,7 @@ use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
 
-const APP_ID: &str = "org.example.ClipWatch";
+const APP_ID: &str = "ru.nhee.ClipWatch";
 const CLIPBOARD_POLL_MS: u64 = 500;
 
 fn main() -> gtk::glib::ExitCode {
@@ -167,8 +167,7 @@ fn build_ui(app: &Application) {
                             dir_label.set_label(&format!("Каталог: {}", path.display()));
                             st.chosen_dir = Some(path);
                             error_label.set_label("");
-                            let can_apply =
-                                st.chosen_dir.is_some() && !st.pending.is_empty();
+                            let can_apply = st.chosen_dir.is_some() && !st.pending.is_empty();
                             apply_all_button.set_sensitive(can_apply);
                         }
                     }
@@ -223,14 +222,7 @@ fn build_ui(app: &Application) {
                 }
                 Some(err) => {
                     error_label.set_label(&format!("Ошибка после {applied} инструкций: {err}"));
-                    refresh_file_list(
-                        &st,
-                        &list,
-                        &status_label,
-                        &error_label,
-                        btn,
-                        &state,
-                    );
+                    refresh_file_list(&st, &list, &status_label, &error_label, btn, &state);
                 }
             }
         });
@@ -244,16 +236,19 @@ fn build_ui(app: &Application) {
         let error_label = error_label.clone();
         let apply_all_button = apply_all_button.clone();
 
-        glib::timeout_add_local(std::time::Duration::from_millis(CLIPBOARD_POLL_MS), move || {
-            poll_clipboard(
-                &state,
-                &list,
-                &status_label,
-                &error_label,
-                &apply_all_button,
-            );
-            glib::ControlFlow::Continue
-        });
+        glib::timeout_add_local(
+            std::time::Duration::from_millis(CLIPBOARD_POLL_MS),
+            move || {
+                poll_clipboard(
+                    &state,
+                    &list,
+                    &status_label,
+                    &error_label,
+                    &apply_all_button,
+                );
+                glib::ControlFlow::Continue
+            },
+        );
     }
 
     // Первичное чтение.
@@ -298,7 +293,14 @@ fn poll_clipboard(
 
     st.pending = set;
     error_label.set_label("");
-    refresh_file_list(&st, list, status_label, error_label, apply_all_button, state);
+    refresh_file_list(
+        &st,
+        list,
+        status_label,
+        error_label,
+        apply_all_button,
+        state,
+    );
 }
 
 fn clear_list(list: &ListBox) {

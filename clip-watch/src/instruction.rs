@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::io;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 /// Действие над файлом.
@@ -9,6 +10,7 @@ pub enum Verb {
     Write,
     Remove,
     Touch,
+    Chmod,
 }
 
 impl Verb {
@@ -17,6 +19,7 @@ impl Verb {
             "write" => Some(Self::Write),
             "remove" => Some(Self::Remove),
             "touch" => Some(Self::Touch),
+            "chmod" => Some(Self::Chmod),
             _ => None,
         }
     }
@@ -26,6 +29,7 @@ impl Verb {
             Self::Write => "write",
             Self::Remove => "remove",
             Self::Touch => "touch",
+            Self::Chmod => "chmod",
         }
     }
 }
@@ -44,10 +48,16 @@ pub struct Instruction {
     pub path: PathBuf,
     pub range: Option<LineRange>,
     pub content: Option<String>,
+    /// Режим для `chmod` (например `0o755`).
+    pub mode: Option<u32>,
 }
 
 impl Instruction {
     pub fn summary(&self) -> String {
+        if self.verb == Verb::Chmod {
+            let mode = self.mode.unwrap_or(0);
+            return format!("chmod {:o} {}", mode, self.path.display());
+        }
         let range = match self.range {
             Some(LineRange {
                 start,
@@ -116,7 +126,9 @@ impl InstructionSet {
 /// ```
 ///
 /// Для `write` code fence обязателен (после пояснений).
-/// Для `remove`/`touch` и пояснения, и код игнорируются.
+/// Для `remove`/`touch`/`chmod` и пояснения, и код игнорируются.
+///
+/// `chmod`: `### chmod 755 path`
 pub fn parse(text: &str) -> InstructionSet {
     let lines: Vec<&str> = text.lines().collect();
     let mut instructions = Vec::new();
@@ -142,6 +154,7 @@ pub fn parse(text: &str) -> InstructionSet {
                     path: header.path,
                     range: header.range,
                     content: Some(content),
+                    mode: None,
                 });
             }
             Verb::Remove => {
@@ -151,6 +164,7 @@ pub fn parse(text: &str) -> InstructionSet {
                     path: header.path,
                     range: header.range,
                     content: None,
+                    mode: None,
                 });
             }
             Verb::Touch => {
@@ -160,6 +174,17 @@ pub fn parse(text: &str) -> InstructionSet {
                     path: header.path,
                     range: None,
                     content: None,
+                    mode: None,
+                });
+            }
+            Verb::Chmod => {
+                i = skip_until_header(&lines, i);
+                instructions.push(Instruction {
+                    verb: Verb::Chmod,
+                    path: header.path,
+                    range: None,
+                    content: None,
+                    mode: header.mode,
                 });
             }
         }
@@ -172,22 +197,48 @@ struct Header {
     verb: Verb,
     path: PathBuf,
     range: Option<LineRange>,
+    mode: Option<u32>,
 }
 
 fn parse_header(line: &str) -> Option<Header> {
     let rest = line.strip_prefix("###")?.trim_start();
     let mut parts = rest.splitn(2, char::is_whitespace);
     let verb = Verb::parse(parts.next()?)?;
-    let target = parts.next()?.trim();
-    if target.is_empty() {
+    let rest = parts.next()?.trim();
+    if rest.is_empty() {
         return None;
     }
-    let (path, range) = split_path_range(target);
+
+    if verb == Verb::Chmod {
+        let mut mode_parts = rest.splitn(2, char::is_whitespace);
+        let mode = parse_mode(mode_parts.next()?)?;
+        let path = mode_parts.next()?.trim();
+        if path.is_empty() {
+            return None;
+        }
+        return Some(Header {
+            verb,
+            path: PathBuf::from(path),
+            range: None,
+            mode: Some(mode),
+        });
+    }
+
+    let (path, range) = split_path_range(rest);
     Some(Header {
         verb,
         path: PathBuf::from(path),
         range,
+        mode: None,
     })
+}
+
+/// Разбирает режим вида `755` / `0755` (восьмеричный).
+fn parse_mode(s: &str) -> Option<u32> {
+    if s.is_empty() || s.len() > 4 || !s.chars().all(|c| matches!(c, '0'..='7')) {
+        return None;
+    }
+    u32::from_str_radix(s, 8).ok()
 }
 
 fn split_path_range(target: &str) -> (&str, Option<LineRange>) {
@@ -307,6 +358,19 @@ impl std::fmt::Display for ApplyError {
 fn apply_one(insn: &Instruction, base: &Path) -> Result<(), ApplyError> {
     let full = base.join(&insn.path);
     match insn.verb {
+        Verb::Chmod => {
+            let mode = insn.mode.ok_or_else(|| {
+                ApplyError::Message(format!(
+                    "chmod {}: не указан режим",
+                    insn.path.display()
+                ))
+            })?;
+            let perms = fs::Permissions::from_mode(mode);
+            fs::set_permissions(&full, perms).map_err(|source| ApplyError::Io {
+                path: full.clone(),
+                source,
+            })
+        }
         Verb::Touch => {
             if let Some(parent) = full.parent() {
                 fs::create_dir_all(parent).map_err(|source| ApplyError::Io {
@@ -562,6 +626,47 @@ ignored
         assert_eq!(set.instructions[0].verb, Verb::Remove);
         assert!(set.instructions[0].content.is_none());
         assert_eq!(set.instructions[1].verb, Verb::Touch);
+    }
+
+    #[test]
+    fn parse_chmod() {
+        let set = parse("### chmod 755 fibo.sh\n");
+        assert_eq!(set.len(), 1);
+        let i = &set.instructions[0];
+        assert_eq!(i.verb, Verb::Chmod);
+        assert_eq!(i.path, PathBuf::from("fibo.sh"));
+        assert_eq!(i.mode, Some(0o755));
+        assert_eq!(i.summary(), "chmod 755 fibo.sh");
+    }
+
+    #[test]
+    fn chmod_ignores_prose_and_needs_no_code() {
+        let text = "\
+### chmod 644 notes.txt
+
+Просто меняем права, код не нужен.
+";
+        let set = parse(text);
+        assert_eq!(set.len(), 1);
+        assert_eq!(set.instructions[0].mode, Some(0o644));
+    }
+
+    #[test]
+    fn apply_chmod() {
+        let dir = std::env::temp_dir().join(format!("clip-watch-chmod-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("fibo.sh");
+        fs::write(&path, "#!/bin/sh\n").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+
+        let set = parse("### chmod 755 fibo.sh\n");
+        apply_all(&set, &dir).unwrap();
+
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o755);
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
