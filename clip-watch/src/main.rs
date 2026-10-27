@@ -1,15 +1,21 @@
+mod instruction;
+
 use gtk::CssProvider;
 use gtk::gdk::Display;
 use gtk::glib;
 use gtk::prelude::*;
 use gtk::{
-    Application, ApplicationWindow, FileChooserAction, FileChooserDialog, Label, ResponseType,
+    Application, ApplicationWindow, Box as GtkBox, Button, FileChooserAction, FileChooserDialog,
+    Label, ListBox, ListBoxRow, Orientation, ResponseType, ScrolledWindow,
 };
 use gtk4 as gtk;
+use instruction::{InstructionSet, apply_all, apply_file, parse};
 use std::cell::RefCell;
+use std::path::PathBuf;
 use std::rc::Rc;
 
-const APP_ID: &str = "org.example.ClipboardLines";
+const APP_ID: &str = "org.example.ClipWatch";
+const CLIPBOARD_POLL_MS: u64 = 500;
 
 fn main() -> gtk::glib::ExitCode {
     let app = Application::builder().application_id(APP_ID).build();
@@ -17,14 +23,30 @@ fn main() -> gtk::glib::ExitCode {
     app.run()
 }
 
-/// Загружаем CSS для стилизации лейбла с числом.
 fn load_css() {
     let provider = CssProvider::new();
     provider.load_from_data(
         r#"
-        .big-number {
-            font-size: 72px;
+        .status {
+            font-size: 14px;
+            margin: 6px;
+        }
+        .dir-label {
+            font-size: 12px;
+            opacity: 0.8;
+            margin-start: 6px;
+            margin-end: 6px;
+        }
+        .file-path {
             font-weight: bold;
+        }
+        .file-ops {
+            font-size: 12px;
+            opacity: 0.75;
+        }
+        .error {
+            color: #c62828;
+            margin: 6px;
         }
         "#,
     );
@@ -36,124 +58,373 @@ fn load_css() {
     );
 }
 
+struct AppState {
+    chosen_dir: Option<PathBuf>,
+    pending: InstructionSet,
+    last_clipboard: String,
+    clipboard: Option<arboard::Clipboard>,
+}
+
 fn build_ui(app: &Application) {
     load_css();
 
     let window = ApplicationWindow::builder()
         .application(app)
-        .title("Clipboard Lines")
-        .default_width(320)
-        .default_height(220)
+        .title("Clip Watch")
+        .default_width(480)
+        .default_height(420)
         .build();
 
-    // Лейбл, в котором показываем количество строк (или прочерк).
-    let result_label = Label::builder()
-        .label("—")
-        .halign(gtk::Align::Center)
-        .valign(gtk::Align::Center)
+    let initial_dir = std::env::current_dir().ok();
+    let dir_label = Label::builder()
+        .label(match &initial_dir {
+            Some(path) => format!("Каталог: {}", path.display()),
+            None => "Каталог не выбран".to_string(),
+        })
+        .halign(gtk::Align::Start)
+        .wrap(true)
         .build();
-    result_label.add_css_class("big-number");
+    dir_label.add_css_class("dir-label");
 
-    // Кнопка выбора каталога.
-    let choose_button = gtk::Button::with_label("Выбрать каталог…");
-    choose_button.set_margin_top(6);
-    choose_button.set_margin_bottom(6);
-    choose_button.set_margin_start(6);
-    choose_button.set_margin_end(6);
+    let status_label = Label::builder()
+        .label("Ожидание инструкций в буфере обмена…")
+        .halign(gtk::Align::Start)
+        .wrap(true)
+        .build();
+    status_label.add_css_class("status");
 
-    let vbox = gtk::Box::new(gtk::Orientation::Vertical, 6);
-    vbox.append(&result_label);
-    vbox.append(&choose_button);
+    let error_label = Label::builder()
+        .label("")
+        .halign(gtk::Align::Start)
+        .wrap(true)
+        .build();
+    error_label.add_css_class("error");
 
-    // Ячейка для хранения выбранного пути к каталогу.
-    let chosen_dir: Rc<RefCell<Option<std::path::PathBuf>>> = Rc::new(RefCell::new(None));
+    let choose_button = Button::with_label("Выбрать каталог…");
+    let apply_all_button = Button::with_label("Применить всё");
+    apply_all_button.set_sensitive(false);
 
-    // Обработчик нажатия на кнопку выбора каталога.
+    let list = ListBox::new();
+    list.set_selection_mode(gtk::SelectionMode::None);
+
+    let scrolled = ScrolledWindow::builder()
+        .vexpand(true)
+        .hexpand(true)
+        .min_content_height(200)
+        .child(&list)
+        .build();
+
+    let top_row = GtkBox::new(Orientation::Horizontal, 6);
+    top_row.set_margin_start(6);
+    top_row.set_margin_end(6);
+    top_row.set_margin_top(6);
+    top_row.append(&choose_button);
+    top_row.append(&apply_all_button);
+
+    let vbox = GtkBox::new(Orientation::Vertical, 4);
+    vbox.append(&top_row);
+    vbox.append(&dir_label);
+    vbox.append(&status_label);
+    vbox.append(&error_label);
+    vbox.append(&scrolled);
+
+    let state = Rc::new(RefCell::new(AppState {
+        chosen_dir: initial_dir,
+        pending: InstructionSet::default(),
+        last_clipboard: String::new(),
+        clipboard: arboard::Clipboard::new().ok(),
+    }));
+
+    // Выбор каталога.
     {
         let window = window.clone();
-        let chosen_dir = chosen_dir.clone();
+        let state = state.clone();
+        let dir_label = dir_label.clone();
+        let apply_all_button = apply_all_button.clone();
+        let error_label = error_label.clone();
 
         choose_button.connect_clicked(move |_| {
-            // Создаём GTK-шный (не нативный) диалог выбора папки.
             let dialog = FileChooserDialog::builder()
                 .title("Выберите каталог")
                 .transient_for(&window)
                 .modal(true)
                 .action(FileChooserAction::SelectFolder)
                 .build();
-
-            // Кнопки добавляем вручную — это особенность GtkFileChooserDialog.
             dialog.add_button("Отмена", ResponseType::Cancel);
             dialog.add_button("Выбрать", ResponseType::Accept);
 
-            let chosen_dir = chosen_dir.clone();
+            let state = state.clone();
+            let dir_label = dir_label.clone();
+            let apply_all_button = apply_all_button.clone();
+            let error_label = error_label.clone();
 
-            // Асинхронно ждём ответа пользователя.
-            // run_future отдаёт управление главному циклу GTK,
-            // поэтому диалог корректно отображается.
             glib::spawn_future_local(async move {
                 let response = dialog.run_future().await;
-
                 if response == ResponseType::Accept {
                     if let Some(file) = dialog.file() {
                         if let Some(path) = file.path() {
-                            println!("Выбран каталог: {}", path.display());
-                            *chosen_dir.borrow_mut() = Some(path);
+                            let mut st = state.borrow_mut();
+                            dir_label.set_label(&format!("Каталог: {}", path.display()));
+                            st.chosen_dir = Some(path);
+                            error_label.set_label("");
+                            let can_apply =
+                                st.chosen_dir.is_some() && !st.pending.is_empty();
+                            apply_all_button.set_sensitive(can_apply);
                         }
                     }
                 }
-
-                // Уничтожаем диалог после использования.
                 dialog.destroy();
             });
         });
     }
 
-    // Буфер обмена: переиспользуем один объект между вызовами.
-    let clipboard = Rc::new(RefCell::new(arboard::Clipboard::new().ok()));
-
-    // Читаем буфер при получении окном фокуса.
+    // Применить всё.
     {
-        let result_label = result_label.clone();
-        let clipboard = clipboard.clone();
+        let state = state.clone();
+        let list = list.clone();
+        let status_label = status_label.clone();
+        let error_label = error_label.clone();
+        let apply_all_button = apply_all_button.clone();
 
-        window.connect_is_active_notify(move |win| {
-            if !win.is_active() {
+        apply_all_button.connect_clicked(move |btn| {
+            let mut st = state.borrow_mut();
+            let Some(base) = st.chosen_dir.clone() else {
+                error_label.set_label("Сначала выберите каталог.");
                 return;
+            };
+
+            let mut applied = 0usize;
+            let mut first_err: Option<String> = None;
+            let mut remaining = Vec::new();
+            for insn in st.pending.instructions.drain(..) {
+                if first_err.is_some() {
+                    remaining.push(insn);
+                    continue;
+                }
+                let one = InstructionSet {
+                    instructions: vec![insn.clone()],
+                };
+                match apply_all(&one, &base) {
+                    Ok(()) => applied += 1,
+                    Err(err) => {
+                        first_err = Some(err.to_string());
+                        remaining.push(insn);
+                    }
+                }
             }
+            st.pending.instructions = remaining;
 
-            let text = match clipboard.borrow_mut().as_mut() {
-                Some(cb) => cb.get_text().ok(),
-                None => None,
-            };
-
-            let value = match text {
-                Some(t) => t.lines().count(),
-                None => 0,
-            };
-
-            let label = if value == 0 {
-                "—".to_string()
-            } else {
-                value.to_string()
-            };
-
-            result_label.set_label(&label);
+            match first_err {
+                None => {
+                    error_label.set_label("");
+                    status_label.set_label(&format!("Применено инструкций: {applied}"));
+                    btn.set_sensitive(false);
+                    clear_list(&list);
+                }
+                Some(err) => {
+                    error_label.set_label(&format!("Ошибка после {applied} инструкций: {err}"));
+                    refresh_file_list(
+                        &st,
+                        &list,
+                        &status_label,
+                        &error_label,
+                        btn,
+                        &state,
+                    );
+                }
+            }
         });
     }
 
-    window.set_child(Some(&vbox));
+    // Периодический опрос буфера обмена.
+    {
+        let state = state.clone();
+        let list = list.clone();
+        let status_label = status_label.clone();
+        let error_label = error_label.clone();
+        let apply_all_button = apply_all_button.clone();
 
-    // Первичное чтение буфера: если окно при старте уже активно,
-    // сигнал is-active-notify может не сработать.
-    if let Some(cb) = clipboard.borrow_mut().as_mut() {
-        if let Ok(t) = cb.get_text() {
-            let n = t.lines().count();
-            if n > 0 {
-                result_label.set_label(&n.to_string());
-            }
-        }
+        glib::timeout_add_local(std::time::Duration::from_millis(CLIPBOARD_POLL_MS), move || {
+            poll_clipboard(
+                &state,
+                &list,
+                &status_label,
+                &error_label,
+                &apply_all_button,
+            );
+            glib::ControlFlow::Continue
+        });
     }
 
+    // Первичное чтение.
+    poll_clipboard(
+        &state,
+        &list,
+        &status_label,
+        &error_label,
+        &apply_all_button,
+    );
+
+    window.set_child(Some(&vbox));
     window.present();
+}
+
+fn poll_clipboard(
+    state: &Rc<RefCell<AppState>>,
+    list: &ListBox,
+    status_label: &Label,
+    error_label: &Label,
+    apply_all_button: &Button,
+) {
+    let text = {
+        let mut st = state.borrow_mut();
+        match st.clipboard.as_mut() {
+            Some(cb) => cb.get_text().unwrap_or_default(),
+            None => return,
+        }
+    };
+
+    let mut st = state.borrow_mut();
+    if text == st.last_clipboard {
+        return;
+    }
+    st.last_clipboard = text.clone();
+
+    let set = parse(&text);
+    if set.is_empty() {
+        // Нет инструкций — pending не трогаем.
+        return;
+    }
+
+    st.pending = set;
+    error_label.set_label("");
+    refresh_file_list(&st, list, status_label, error_label, apply_all_button, state);
+}
+
+fn clear_list(list: &ListBox) {
+    while let Some(child) = list.first_child() {
+        list.remove(&child);
+    }
+}
+
+fn refresh_file_list(
+    st: &AppState,
+    list: &ListBox,
+    status_label: &Label,
+    error_label: &Label,
+    apply_all_button: &Button,
+    state: &Rc<RefCell<AppState>>,
+) {
+    clear_list(list);
+
+    let files = st.pending.files();
+    let n_ins = st.pending.len();
+    let n_files = files.len();
+
+    if n_ins == 0 {
+        status_label.set_label("Нет отложенных инструкций.");
+        apply_all_button.set_sensitive(false);
+        return;
+    }
+
+    status_label.set_label(&format!(
+        "Готово к применению: {n_ins} инструкций в {n_files} файлах"
+    ));
+    apply_all_button.set_sensitive(st.chosen_dir.is_some());
+
+    for path in files {
+        let summaries = st.pending.summaries_for(&path);
+        let row = build_file_row(
+            path,
+            summaries,
+            state.clone(),
+            list.clone(),
+            status_label.clone(),
+            error_label.clone(),
+            apply_all_button.clone(),
+        );
+        list.append(&row);
+    }
+}
+
+fn build_file_row(
+    path: PathBuf,
+    summaries: Vec<String>,
+    state: Rc<RefCell<AppState>>,
+    list: ListBox,
+    status_label: Label,
+    error_label: Label,
+    apply_all_button: Button,
+) -> ListBoxRow {
+    let path_label = Label::builder()
+        .label(path.display().to_string())
+        .halign(gtk::Align::Start)
+        .hexpand(true)
+        .build();
+    path_label.add_css_class("file-path");
+
+    let ops_label = Label::builder()
+        .label(summaries.join(" · "))
+        .halign(gtk::Align::Start)
+        .wrap(true)
+        .build();
+    ops_label.add_css_class("file-ops");
+
+    let apply_btn = Button::with_label("Применить");
+
+    let text_col = GtkBox::new(Orientation::Vertical, 2);
+    text_col.set_hexpand(true);
+    text_col.append(&path_label);
+    text_col.append(&ops_label);
+
+    let row_box = GtkBox::new(Orientation::Horizontal, 8);
+    row_box.set_margin_start(8);
+    row_box.set_margin_end(8);
+    row_box.set_margin_top(6);
+    row_box.set_margin_bottom(6);
+    row_box.append(&text_col);
+    row_box.append(&apply_btn);
+
+    {
+        let path = path.clone();
+        apply_btn.connect_clicked(move |_| {
+            let result = {
+                let st = state.borrow();
+                let Some(base) = st.chosen_dir.clone() else {
+                    error_label.set_label("Сначала выберите каталог.");
+                    return;
+                };
+                apply_file(&st.pending, &base, &path)
+            };
+
+            match result {
+                Ok(()) => {
+                    let mut st = state.borrow_mut();
+                    st.pending.remove_file(&path);
+                    error_label.set_label("");
+                    if st.pending.is_empty() {
+                        status_label.set_label("Все изменения применены.");
+                        apply_all_button.set_sensitive(false);
+                        clear_list(&list);
+                    } else {
+                        refresh_file_list(
+                            &st,
+                            &list,
+                            &status_label,
+                            &error_label,
+                            &apply_all_button,
+                            &state,
+                        );
+                    }
+                }
+                Err(err) => {
+                    error_label.set_label(&format!("Ошибка: {err}"));
+                }
+            }
+        });
+    }
+
+    let row = ListBoxRow::new();
+    row.set_child(Some(&row_box));
+    row
 }
