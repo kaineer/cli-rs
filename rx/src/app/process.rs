@@ -1,6 +1,6 @@
 use crate::sanitize::sanitize_output;
 use std::collections::HashSet;
-use std::io::{BufRead, BufReader};
+use std::io::Read;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
@@ -16,23 +16,34 @@ pub struct ProcessPool {
 
 struct RunningProcess {
     entry_idx: usize,
+    /// Для `live: true` — индекс live-записи в `App::runs`.
+    run_id: Option<usize>,
     child: Child,
     started_at: SystemTime,
     started_instant: Instant,
-    rx: Receiver<StreamLine>,
-    stdout_buf: String,
-    stderr_buf: String,
+    rx: Receiver<StreamChunk>,
+    stdout_raw: Vec<u8>,
+    stderr_raw: Vec<u8>,
 }
 
-enum StreamLine {
-    Stdout(String),
-    Stderr(String),
+enum StreamChunk {
+    Stdout(Vec<u8>),
+    Stderr(Vec<u8>),
     Eof,
 }
 
-/// Временная структура: завершившийся процесс, готовый стать RunRecord.
+/// Обновление буферов ещё идущего live-процесса.
+pub struct LiveOutput {
+    pub run_id: usize,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+/// Временная структура: завершившийся процесс, готовый стать / обновить RunRecord.
 pub struct FinishedRun {
     pub entry_idx: usize,
+    /// Если процесс был live — обновить эту запись, иначе создать новую.
+    pub run_id: Option<usize>,
     pub started_at: SystemTime,
     pub finished_at: SystemTime,
     pub duration: Duration,
@@ -66,7 +77,13 @@ impl ProcessPool {
     }
 
     /// Запускает `sh -c <cmd>` и подписывается на stdout/stderr.
-    pub fn spawn(&mut self, entry_idx: usize, cmd: &str) -> std::io::Result<()> {
+    /// `run_id` — для live-режима (запись уже создана).
+    pub fn spawn(
+        &mut self,
+        entry_idx: usize,
+        cmd: &str,
+        run_id: Option<usize>,
+    ) -> std::io::Result<()> {
         let mut cmd_builder = Command::new("sh");
         cmd_builder
             .arg("-c")
@@ -83,37 +100,47 @@ impl ProcessPool {
 
         let mut child = cmd_builder.spawn()?;
 
-        let (tx, rx) = mpsc::channel::<StreamLine>();
+        let (tx, rx) = mpsc::channel::<StreamChunk>();
 
-        if let Some(out) = child.stdout.take() {
+        if let Some(mut out) = child.stdout.take() {
             let tx = tx.clone();
             thread::spawn(move || {
-                let reader = BufReader::new(out);
-                for line in reader.lines() {
-                    match line {
-                        Ok(l) => {
-                            let _ = tx.send(StreamLine::Stdout(l));
+                let mut buf = [0u8; 4096];
+                loop {
+                    match out.read(&mut buf) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            if tx.send(StreamChunk::Stdout(buf[..n].to_vec())).is_err() {
+                                break;
+                            }
                         }
                         Err(_) => break,
                     }
                 }
-                let _ = tx.send(StreamLine::Eof);
+                let _ = tx.send(StreamChunk::Eof);
             });
+        } else {
+            let _ = tx.send(StreamChunk::Eof);
         }
-        if let Some(err) = child.stderr.take() {
+        if let Some(mut err) = child.stderr.take() {
             let tx = tx.clone();
             thread::spawn(move || {
-                let reader = BufReader::new(err);
-                for line in reader.lines() {
-                    match line {
-                        Ok(l) => {
-                            let _ = tx.send(StreamLine::Stderr(l));
+                let mut buf = [0u8; 4096];
+                loop {
+                    match err.read(&mut buf) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            if tx.send(StreamChunk::Stderr(buf[..n].to_vec())).is_err() {
+                                break;
+                            }
                         }
                         Err(_) => break,
                     }
                 }
-                let _ = tx.send(StreamLine::Eof);
+                let _ = tx.send(StreamChunk::Eof);
             });
+        } else {
+            let _ = tx.send(StreamChunk::Eof);
         }
         drop(tx);
 
@@ -121,32 +148,35 @@ impl ProcessPool {
         let started_instant = Instant::now();
         self.running.push(RunningProcess {
             entry_idx,
+            run_id,
             child,
             started_at,
             started_instant,
             rx,
-            stdout_buf: String::new(),
-            stderr_buf: String::new(),
+            stdout_raw: Vec::new(),
+            stderr_raw: Vec::new(),
         });
         Ok(())
     }
 
-    /// Дренирует каналы всех процессов и собирает завершившиеся.
-    pub fn poll(&mut self) -> Vec<FinishedRun> {
+    /// Дренирует каналы: отдаёт снимки live-процессов и завершившиеся.
+    pub fn poll(&mut self) -> (Vec<LiveOutput>, Vec<FinishedRun>) {
+        let mut live: Vec<LiveOutput> = Vec::new();
         let mut finished: Vec<FinishedRun> = Vec::new();
 
         for rp in self.running.iter_mut() {
+            let mut changed = false;
             loop {
                 match rp.rx.try_recv() {
-                    Ok(StreamLine::Stdout(l)) => {
-                        rp.stdout_buf.push_str(&sanitize_output(&l));
-                        rp.stdout_buf.push('\n');
+                    Ok(StreamChunk::Stdout(chunk)) => {
+                        rp.stdout_raw.extend_from_slice(&chunk);
+                        changed = true;
                     }
-                    Ok(StreamLine::Stderr(l)) => {
-                        rp.stderr_buf.push_str(&sanitize_output(&l));
-                        rp.stderr_buf.push('\n');
+                    Ok(StreamChunk::Stderr(chunk)) => {
+                        rp.stderr_raw.extend_from_slice(&chunk);
+                        changed = true;
                     }
-                    Ok(StreamLine::Eof) => {}
+                    Ok(StreamChunk::Eof) => {}
                     Err(mpsc::TryRecvError::Empty) => break,
                     Err(mpsc::TryRecvError::Disconnected) => break,
                 }
@@ -154,17 +184,17 @@ impl ProcessPool {
 
             match rp.child.try_wait() {
                 Ok(Some(status)) => {
-                    for _ in 0..5 {
+                    // Дочитываем остаток канала.
+                    loop {
                         match rp.rx.try_recv() {
-                            Ok(StreamLine::Stdout(l)) => {
-                                rp.stdout_buf.push_str(&sanitize_output(&l));
-                                rp.stdout_buf.push('\n');
+                            Ok(StreamChunk::Stdout(chunk)) => {
+                                rp.stdout_raw.extend_from_slice(&chunk);
                             }
-                            Ok(StreamLine::Stderr(l)) => {
-                                rp.stderr_buf.push_str(&sanitize_output(&l));
-                                rp.stderr_buf.push('\n');
+                            Ok(StreamChunk::Stderr(chunk)) => {
+                                rp.stderr_raw.extend_from_slice(&chunk);
                             }
-                            _ => break,
+                            Ok(StreamChunk::Eof) => {}
+                            Err(_) => break,
                         }
                     }
 
@@ -176,27 +206,39 @@ impl ProcessPool {
 
                     finished.push(FinishedRun {
                         entry_idx: rp.entry_idx,
+                        run_id: rp.run_id,
                         started_at: rp.started_at,
                         finished_at: SystemTime::now(),
                         duration: rp.started_instant.elapsed(),
                         exit_code,
                         signal,
                         ok: exit_code == Some(0),
-                        stdout: std::mem::take(&mut rp.stdout_buf),
-                        stderr: std::mem::take(&mut rp.stderr_buf),
+                        stdout: sanitize_bytes(&rp.stdout_raw),
+                        stderr: sanitize_bytes(&rp.stderr_raw),
                     });
                 }
-                Ok(None) => {}
+                Ok(None) => {
+                    if changed {
+                        if let Some(run_id) = rp.run_id {
+                            live.push(LiveOutput {
+                                run_id,
+                                stdout: sanitize_bytes(&rp.stdout_raw),
+                                stderr: sanitize_bytes(&rp.stderr_raw),
+                            });
+                        }
+                    }
+                }
                 Err(e) => {
                     finished.push(FinishedRun {
                         entry_idx: rp.entry_idx,
+                        run_id: rp.run_id,
                         started_at: rp.started_at,
                         finished_at: SystemTime::now(),
                         duration: rp.started_instant.elapsed(),
                         exit_code: None,
                         signal: None,
                         ok: false,
-                        stdout: std::mem::take(&mut rp.stdout_buf),
+                        stdout: sanitize_bytes(&rp.stdout_raw),
                         stderr: format!("wait error: {e}"),
                     });
                 }
@@ -210,6 +252,10 @@ impl ProcessPool {
                 .retain(|rp| !finished_idxs.contains(&rp.entry_idx));
         }
 
-        finished
+        (live, finished)
     }
+}
+
+fn sanitize_bytes(raw: &[u8]) -> String {
+    sanitize_output(&String::from_utf8_lossy(raw))
 }

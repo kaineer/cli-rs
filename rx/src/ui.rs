@@ -201,13 +201,23 @@ fn draw_right(f: &mut Frame, app: &mut App, area: Rect) {
 
         let subdued = in_body && !is_selected;
 
-        let sym = if run.ok { "✓" } else { "✗" };
-        let sym_color = if subdued {
-            Color::DarkGray
-        } else if run.ok {
-            Color::Green
+        let (sym, sym_color) = if run.live {
+            let c = if subdued {
+                Color::DarkGray
+            } else {
+                Color::Yellow
+            };
+            (spinner_frame(app.tick).to_string(), c)
         } else {
-            Color::Red
+            let sym = if run.ok { "✓" } else { "✗" };
+            let c = if subdued {
+                Color::DarkGray
+            } else if run.ok {
+                Color::Green
+            } else {
+                Color::Red
+            };
+            (sym.to_string(), c)
         };
         let meta_color = if subdued {
             Color::DarkGray
@@ -230,9 +240,11 @@ fn draw_right(f: &mut Frame, app: &mut App, area: Rect) {
             Span::styled(hhmmss, Style::default().fg(meta_color)),
             Span::raw(" "),
         ];
-        if let Some(badge) = failure_badge(run) {
-            header_spans.push(badge);
-            header_spans.push(Span::raw(" "));
+        if !run.live {
+            if let Some(badge) = failure_badge(run) {
+                header_spans.push(badge);
+                header_spans.push(Span::raw(" "));
+            }
         }
         header_spans.push(Span::styled(
             format!("{total} {plural}"),

@@ -12,7 +12,7 @@ use crate::run_record::RunRecord;
 pub use process::FinishedRun;
 pub use view::{block_height, format_duration, RunView, RunViewState, PREVIEW_LINES};
 
-use process::ProcessPool;
+use process::{LiveOutput, ProcessPool};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Panel {
@@ -57,6 +57,8 @@ pub struct App {
     pub right_panel_rect: Rect,
     pub status: String,
     pub should_quit: bool,
+    /// Ожидание второго `g` для chord `gg`.
+    pub pending_g: bool,
     pub tick: u64,
 
     /// История всех запусков в порядке появления.
@@ -91,6 +93,7 @@ impl App {
             right_panel_rect: Rect::default(),
             status: String::new(),
             should_quit: false,
+            pending_g: false,
             tick: 0,
             runs: Vec::new(),
             run_views: Vec::new(),
@@ -123,6 +126,29 @@ impl App {
             None => 0,
         };
         self.list_state.select(Some(i));
+        self.on_left_selection_changed();
+    }
+
+    pub fn go_first(&mut self) {
+        if self.entries.is_empty() {
+            return;
+        }
+        if self.list_state.selected() == Some(0) {
+            return;
+        }
+        self.list_state.select(Some(0));
+        self.on_left_selection_changed();
+    }
+
+    pub fn go_last(&mut self) {
+        if self.entries.is_empty() {
+            return;
+        }
+        let last = self.entries.len() - 1;
+        if self.list_state.selected() == Some(last) {
+            return;
+        }
+        self.list_state.select(Some(last));
         self.on_left_selection_changed();
     }
 
@@ -399,6 +425,22 @@ impl App {
         self.right_state.select(Some(i));
     }
 
+    pub fn right_go_first(&mut self) {
+        let n = self.runs_for_selected().len();
+        if n == 0 {
+            return;
+        }
+        self.right_state.select(Some(0));
+    }
+
+    pub fn right_go_last(&mut self) {
+        let n = self.runs_for_selected().len();
+        if n == 0 {
+            return;
+        }
+        self.right_state.select(Some(n - 1));
+    }
+
     /// Space в правой панели: Collapsed → Preview → Full → Collapsed.
     /// Если строк ≤ PREVIEW_LINES, Full недоступен.
     pub fn right_toggle_view(&mut self) {
@@ -592,8 +634,52 @@ impl App {
     pub fn tick(&mut self) {
         self.tick = self.tick.wrapping_add(1);
 
-        let finished = self.processes.poll();
+        let (lives, finished) = self.processes.poll();
+        for live in lives {
+            self.apply_live(live);
+        }
         for f in finished {
+            self.apply_finished(f);
+        }
+    }
+
+    fn apply_live(&mut self, live: LiveOutput) {
+        let run_id = live.run_id;
+        let Some(run) = self.runs.get_mut(run_id) else {
+            return;
+        };
+        if !run.live {
+            return;
+        }
+        run.stdout = live.stdout;
+        run.stderr = live.stderr;
+        self.follow_live_scroll(run_id);
+    }
+
+    fn follow_live_scroll(&mut self, run_id: usize) {
+        let vs = &mut self.run_views[run_id];
+        if vs.view != RunView::Full {
+            return;
+        }
+        let content_rows = self.runs[run_id].body_lines().len();
+        let viewport = (self.right_area_height as usize).saturating_sub(1);
+        vs.scroll = content_rows.saturating_sub(viewport);
+    }
+
+    fn apply_finished(&mut self, f: FinishedRun) {
+        let run_id = if let Some(run_id) = f.run_id {
+            if let Some(run) = self.runs.get_mut(run_id) {
+                run.finished_at = f.finished_at;
+                run.duration = f.duration;
+                run.exit_code = f.exit_code;
+                run.signal = f.signal;
+                run.ok = f.ok;
+                run.live = false;
+                run.stdout = f.stdout;
+                run.stderr = f.stderr;
+            }
+            run_id
+        } else {
             let record = RunRecord {
                 entry_idx: f.entry_idx,
                 started_at: f.started_at,
@@ -602,20 +688,28 @@ impl App {
                 exit_code: f.exit_code,
                 signal: f.signal,
                 ok: f.ok,
+                live: false,
                 stdout: f.stdout,
                 stderr: f.stderr,
             };
             self.runs.push(record);
             self.run_views.push(RunViewState::default());
-            let run_id = self.runs.len() - 1;
-            if f.entry_idx < self.states.len() {
-                self.states[f.entry_idx] = EntryState::Done { run_id };
-                self.status = format!(
-                    "{} {}",
-                    self.entries[f.entry_idx].label,
-                    if f.ok { "ok" } else { "ошибка" },
-                );
-                if self.list_state.selected() == Some(f.entry_idx) {
+            self.runs.len() - 1
+        };
+
+        if f.entry_idx < self.states.len() {
+            self.states[f.entry_idx] = EntryState::Done { run_id };
+            self.status = format!(
+                "{} {}",
+                self.entries[f.entry_idx].label,
+                if f.ok { "ok" } else { "ошибка" },
+            );
+            if self.list_state.selected() == Some(f.entry_idx) {
+                if f.run_id.is_some() {
+                    // Live: запись уже в списке — только follow-scroll,
+                    // не трогая выделение / раскрытие.
+                    self.follow_live_scroll(run_id);
+                } else {
                     self.on_left_selection_changed();
                 }
             }
@@ -629,29 +723,74 @@ impl App {
         }
 
         let cmd = self.entries[idx].cmd.clone();
-        match self.processes.spawn(idx, &cmd) {
+        let live = self.entries[idx].live;
+
+        let run_id = if live {
+            let now = std::time::SystemTime::now();
+            let record = RunRecord {
+                entry_idx: idx,
+                started_at: now,
+                finished_at: now,
+                duration: std::time::Duration::ZERO,
+                exit_code: None,
+                signal: None,
+                ok: true,
+                live: true,
+                stdout: String::new(),
+                stderr: String::new(),
+            };
+            self.runs.push(record);
+            self.run_views.push(RunViewState {
+                view: RunView::Full,
+                scroll: 0,
+            });
+            Some(self.runs.len() - 1)
+        } else {
+            None
+        };
+
+        match self.processes.spawn(idx, &cmd, run_id) {
             Ok(()) => {
                 self.states[idx] = EntryState::Running;
                 self.status = format!("Запущено: {}", self.entries[idx].label);
+                if let Some(run_id) = run_id {
+                    if self.list_state.selected() == Some(idx) {
+                        self.on_left_selection_changed();
+                        self.collapse_all_views_except(Some(run_id));
+                        self.run_views[run_id].view = RunView::Full;
+                        self.run_views[run_id].scroll = 0;
+                    }
+                }
             }
             Err(e) => {
                 self.status = format!("Ошибка запуска: {e}");
-                let now = std::time::SystemTime::now();
-                let record = RunRecord {
-                    entry_idx: idx,
-                    started_at: now,
-                    finished_at: now,
-                    duration: std::time::Duration::ZERO,
-                    exit_code: None,
-                    signal: None,
-                    ok: false,
-                    stdout: String::new(),
-                    stderr: e.to_string(),
-                };
-                self.runs.push(record);
-                self.run_views.push(RunViewState::default());
-                let run_id = self.runs.len() - 1;
-                self.states[idx] = EntryState::Done { run_id };
+                if let Some(run_id) = run_id {
+                    if let Some(run) = self.runs.get_mut(run_id) {
+                        run.live = false;
+                        run.ok = false;
+                        run.stderr = e.to_string();
+                        run.finished_at = std::time::SystemTime::now();
+                    }
+                    self.states[idx] = EntryState::Done { run_id };
+                } else {
+                    let now = std::time::SystemTime::now();
+                    let record = RunRecord {
+                        entry_idx: idx,
+                        started_at: now,
+                        finished_at: now,
+                        duration: std::time::Duration::ZERO,
+                        exit_code: None,
+                        signal: None,
+                        ok: false,
+                        live: false,
+                        stdout: String::new(),
+                        stderr: e.to_string(),
+                    };
+                    self.runs.push(record);
+                    self.run_views.push(RunViewState::default());
+                    let run_id = self.runs.len() - 1;
+                    self.states[idx] = EntryState::Done { run_id };
+                }
                 if self.list_state.selected() == Some(idx) {
                     self.on_left_selection_changed();
                 }
@@ -698,6 +837,7 @@ mod tests {
         MenuEntry {
             label: label.into(),
             cmd: cmd.into(),
+            live: false,
         }
     }
 
@@ -737,6 +877,7 @@ mod tests {
             exit_code: Some(0),
             signal: None,
             ok: true,
+            live: false,
             stdout: "ok".into(),
             stderr: String::new(),
         });
@@ -762,6 +903,62 @@ mod tests {
         assert_eq!(app.runs[0].entry_idx, 1);
         assert!(app.status.starts_with("Перечитано"));
         assert!(app.status.contains("3 пункта"));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn live_shows_stdout_before_exit() {
+        let path = std::env::temp_dir().join(format!(
+            "rx-menu-live-{}.yaml",
+            std::process::id()
+        ));
+        // Печатаем строку, ждём, потом выходим — успеем увидеть live-вывод.
+        std::fs::write(
+            &path,
+            "- cmd: sh -c 'printf \"hello\\n\"; sleep 0.4'\n  label: s\n  live: true\n",
+        )
+        .unwrap();
+
+        let entries = load_entries(&path).unwrap();
+        assert!(entries[0].live);
+        let mut app = App::new(path.clone(), entries);
+        app.activate_selected();
+
+        assert!(matches!(app.states[0], EntryState::Running));
+        assert_eq!(app.runs.len(), 1);
+        assert!(app.runs[0].live);
+        assert_eq!(app.run_views[0].view, RunView::Full);
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while std::time::Instant::now() < deadline {
+            app.tick();
+            if app.runs[0].stdout.contains("hello") {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(40));
+        }
+        assert!(
+            app.runs[0].live,
+            "ещё должно выполняться, когда появился stdout"
+        );
+        assert!(
+            app.runs[0].stdout.contains("hello"),
+            "stdout={}",
+            app.runs[0].stdout
+        );
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while std::time::Instant::now() < deadline {
+            app.tick();
+            if !app.runs[0].live {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(40));
+        }
+        assert!(!app.runs[0].live);
+        assert!(app.runs[0].ok);
+        assert!(matches!(app.states[0], EntryState::Done { run_id: 0 }));
 
         let _ = std::fs::remove_file(&path);
     }

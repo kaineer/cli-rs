@@ -7,7 +7,7 @@ pub struct RunRecord {
     pub entry_idx: usize,
     /// Когда стартовали.
     pub started_at: SystemTime,
-    /// Когда процесс завершился.
+    /// Когда процесс завершился (для live — момент старта, пока не финализирован).
     pub finished_at: SystemTime,
     /// Сколько длилось выполнение.
     pub duration: Duration,
@@ -17,6 +17,8 @@ pub struct RunRecord {
     pub signal: Option<i32>,
     /// Успех = exit_code == Some(0).
     pub ok: bool,
+    /// Ещё выполняется: stdout/stderr обновляются на лету (`live: true`).
+    pub live: bool,
     /// Собранный stdout (UTF-8, lossy).
     pub stdout: String,
     /// Собранный stderr (UTF-8, lossy).
@@ -26,11 +28,11 @@ pub struct RunRecord {
 impl RunRecord {
     /// Строки тела для правой панели.
     ///
-    /// Успех — только stdout.
+    /// Live / успех — только stdout.
     /// Ошибка — stderr (или `exit code: N`, если stderr пуст); если stdout
     /// непуст, после этого пустая строка и сам stdout.
     pub fn body_lines(&self) -> Vec<String> {
-        if self.ok {
+        if self.live || self.ok {
             return self.stdout.lines().map(str::to_string).collect();
         }
 
@@ -68,9 +70,17 @@ mod tests {
             exit_code,
             signal: None,
             ok,
+            live: false,
             stdout: stdout.to_string(),
             stderr: stderr.to_string(),
         }
+    }
+
+    #[test]
+    fn live_shows_stdout_even_if_not_ok_yet() {
+        let mut r = run(false, None, "partial\n", "");
+        r.live = true;
+        assert_eq!(r.body_lines(), vec!["partial"]);
     }
 
     #[test]

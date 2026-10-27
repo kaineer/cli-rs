@@ -19,12 +19,29 @@ pub fn handle_events(app: &mut App, timeout: Duration) -> Result<()> {
 }
 
 fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
+    // Chord `gg`: первый `g` ставит pending, второй — jump to first.
+    if app.pending_g {
+        app.pending_g = false;
+        if matches!((code, modifiers), (KeyCode::Char('g'), KeyModifiers::NONE)) {
+            go_first(app);
+            return;
+        }
+        // Иначе — сброс pending и обычная обработка текущего клавиша.
+    }
+
     match (code, modifiers) {
         (KeyCode::Char('q'), _) | (KeyCode::Esc, _) => app.quit(),
 
         (KeyCode::Char('r'), _) | (KeyCode::Char('R'), _) => app.reload_menu(),
 
         (KeyCode::Tab, _) | (KeyCode::BackTab, _) => app.toggle_focus(),
+
+        // gg — первый `g` (ожидание второго)
+        (KeyCode::Char('g'), KeyModifiers::NONE) => {
+            app.pending_g = true;
+        }
+        // G — к последней записи
+        (KeyCode::Char('G'), _) | (KeyCode::Char('g'), KeyModifiers::SHIFT) => go_last(app),
 
         // j / Down
         (KeyCode::Down, _) | (KeyCode::Char('j'), KeyModifiers::NONE) => match app.focus {
@@ -52,6 +69,20 @@ fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
         },
 
         _ => {}
+    }
+}
+
+fn go_first(app: &mut App) {
+    match app.focus {
+        Panel::Left => app.go_first(),
+        Panel::Right => app.right_go_first(),
+    }
+}
+
+fn go_last(app: &mut App) {
+    match app.focus {
+        Panel::Left => app.go_last(),
+        Panel::Right => app.right_go_last(),
     }
 }
 
