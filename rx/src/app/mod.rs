@@ -2,17 +2,21 @@ pub mod process;
 pub mod view;
 
 use std::path::PathBuf;
+use std::sync::mpsc::{self, Receiver, Sender};
 
 use ratatui::layout::Rect;
 use ratatui::widgets::ListState;
 
 use crate::config::{load_entries, MenuEntry};
 use crate::run_record::RunRecord;
+use crate::split::{self, SplitOutcome};
 
 pub use process::FinishedRun;
 pub use view::{block_height, format_duration, RunView, RunViewState, PREVIEW_LINES};
 
 use process::{LiveOutput, ProcessPool};
+
+pub use crate::split::Multiplexer;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Panel {
@@ -68,15 +72,21 @@ pub struct App {
 
     /// Активные процессы.
     processes: ProcessPool,
+
+    /// Мультиплексор, внутри которого запущен rx (tmux / herdr-app).
+    mux: Option<Multiplexer>,
+    split_tx: Sender<SplitOutcome>,
+    split_rx: Receiver<SplitOutcome>,
 }
 
 impl App {
-    pub fn new(menu_path: PathBuf, entries: Vec<MenuEntry>) -> Self {
+    pub fn new(menu_path: PathBuf, entries: Vec<MenuEntry>, mux: Option<Multiplexer>) -> Self {
         let states = entries.iter().map(|_| EntryState::Idle).collect();
         let mut list_state = ListState::default();
         if !entries.is_empty() {
             list_state.select(Some(0));
         }
+        let (split_tx, split_rx) = mpsc::channel();
         Self {
             menu_path,
             entries,
@@ -98,6 +108,9 @@ impl App {
             runs: Vec::new(),
             run_views: Vec::new(),
             processes: ProcessPool::new(),
+            mux,
+            split_tx,
+            split_rx,
         }
     }
 
@@ -634,6 +647,17 @@ impl App {
     pub fn tick(&mut self) {
         self.tick = self.tick.wrapping_add(1);
 
+        while let Ok(outcome) = self.split_rx.try_recv() {
+            match outcome {
+                SplitOutcome::Ok { label } => {
+                    self.status = format!("Открыто в панели: {label}");
+                }
+                SplitOutcome::Err { label, error } => {
+                    self.status = format!("Панель для {label}: {error}");
+                }
+            }
+        }
+
         let (lives, finished) = self.processes.poll();
         for live in lives {
             self.apply_live(live);
@@ -719,6 +743,16 @@ impl App {
     fn activate(&mut self, idx: usize) {
         if self.processes.is_running(idx) {
             self.status = format!("Уже выполняется для {}", self.entries[idx].label);
+            return;
+        }
+
+        // Внутри tmux/herdr-app команда уходит в новую панель: меню остаётся
+        // отзывчивым, а полный вывод виден в отдельной панели.
+        if let (Some(mux), true) = (self.mux, self.entries[idx].split) {
+            let label = self.entries[idx].label.clone();
+            let cmd = self.entries[idx].cmd.clone();
+            self.status = format!("Открываю панель: {label}");
+            split::launch(mux, &cmd, label, self.split_tx.clone());
             return;
         }
 
@@ -838,6 +872,7 @@ mod tests {
             label: label.into(),
             cmd: cmd.into(),
             live: false,
+            split: false,
         }
     }
 
@@ -866,7 +901,7 @@ mod tests {
         .unwrap();
 
         let entries = load_entries(&path).unwrap();
-        let mut app = App::new(path.clone(), entries);
+        let mut app = App::new(path.clone(), entries, None);
         app.list_state.select(Some(1));
         app.states[1] = EntryState::Done { run_id: 0 };
         app.runs.push(RunRecord {
@@ -922,7 +957,7 @@ mod tests {
 
         let entries = load_entries(&path).unwrap();
         assert!(entries[0].live);
-        let mut app = App::new(path.clone(), entries);
+        let mut app = App::new(path.clone(), entries, None);
         app.activate_selected();
 
         assert!(matches!(app.states[0], EntryState::Running));

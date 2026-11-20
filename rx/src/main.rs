@@ -4,6 +4,7 @@ mod event;
 mod run;
 mod run_record;
 mod sanitize;
+mod split;
 mod ui;
 
 use std::{io::stdout, path::PathBuf};
@@ -31,7 +32,7 @@ fn main() -> Result<()> {
     let backend = CrosstermBackend::new(out);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut app = App::new(path, entries);
+    let mut app = App::new(path, entries, split::detect());
     let res = run::run(&mut terminal, &mut app);
 
     disable_raw_mode()?;

@@ -3,6 +3,10 @@ use std::{fs::File, io::BufReader, path::PathBuf};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct MenuEntry {
     pub cmd: String,
@@ -11,6 +15,10 @@ pub struct MenuEntry {
     /// В YAML: `live: true` или алиас `stream: true`.
     #[serde(default, alias = "stream")]
     pub live: bool,
+    /// Запускать в новой панели tmux/herdr-app, если rx запущен внутри них.
+    /// По умолчанию включено.
+    #[serde(default = "default_true")]
+    pub split: bool,
 }
 
 pub fn load_entries(path: &PathBuf) -> Result<Vec<MenuEntry>> {
@@ -37,5 +45,14 @@ mod tests {
         assert!(live[0].live);
         assert!(stream[0].live);
         assert!(!plain[0].live);
+    }
+
+    #[test]
+    fn split_defaults_to_true() {
+        let entries: Vec<MenuEntry> =
+            serde_yaml::from_str("- cmd: a\n  label: a\n- cmd: b\n  label: b\n  split: false\n")
+                .unwrap();
+        assert!(entries[0].split);
+        assert!(!entries[1].split);
     }
 }
