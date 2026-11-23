@@ -1,0 +1,14 @@
+[package]
+name = "vmd"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+gpui = "0.2.2"
+pulldown-cmark = { version = "0.13", default-features = false }
+
+# `cargo install --path .` игнорирует `Cargo.lock`, поэтому пины продублированы
+# здесь — иначе резолвится libc >= 0.2.187, на котором не собирается
+# xattr 0.2.3 (тянется через gpui_http_client: в нём нет libc::ENOATTR).
+libc = "=0.2.186"
+mio = "=1.2.0"
