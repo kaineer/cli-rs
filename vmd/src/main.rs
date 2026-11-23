@@ -16,7 +16,7 @@ use gpui::{
 
 use markdown::{Block, BlockKind, InlineStyle};
 
-actions!(vmd, [LineDown, LineUp, PageDown, PageUp, ToTop, ToBottom]);
+actions!(vmd, [LineDown, LineUp, PageDown, PageUp, ToTop, ToBottom, Quit]);
 
 // ---- Nord-палитра ----
 
@@ -53,6 +53,9 @@ const LINE_STEP: f32 = 52.0;
 /// Отступ на один уровень вложенности списка.
 const INDENT_STEP: f32 = 24.0;
 const PAGE_MARGIN: f32 = 48.0;
+/// Паддинг вокруг inline-кода: подложка рисуется по глифам, поэтому
+/// добавляем по пробелу с каждой стороны.
+const CODE_PAD: char = '\u{2009}';
 const PROSE_WIDTH: f32 = 760.0;
 
 fn mono_family() -> SharedString {
@@ -98,13 +101,20 @@ fn styled_spans(
     code_background: Option<gpui::Rgba>,
     base_family: &SharedString,
 ) -> StyledText {
-    let text: String = block.spans.iter().map(|s| s.text.as_str()).collect();
+    let mut out = String::new();
     let mut runs: Vec<TextRun> = Vec::with_capacity(block.spans.len());
 
     for span in &block.spans {
         let font = span_font(span.style, weight, base_family);
+        // Подложка кода рисуется строго по глифам, поэтому паддинг справа и
+        // слева добавляем пробелом внутрь самого спана: он попадёт в фон.
+        let text = if span.style.code {
+            format!("{CODE_PAD}{}{CODE_PAD}", span.text)
+        } else {
+            span.text.clone()
+        };
         let mut run = TextRun {
-            len: span.text.len(),
+            len: text.len(),
             font,
             color: color.into(),
             background_color: None,
@@ -121,9 +131,10 @@ fn styled_spans(
             });
         }
         runs.push(run);
+        out.push_str(&text);
     }
 
-    StyledText::new(SharedString::from(text)).with_runs(runs)
+    StyledText::new(SharedString::from(out)).with_runs(runs)
 }
 
 struct Viewer {
@@ -371,6 +382,7 @@ impl Render for Viewer {
             .on_action(cx.listener(|this, _: &PageUp, _, cx| this.scroll_page(false, cx)))
             .on_action(cx.listener(|this, _: &ToTop, _, cx| this.scroll_to_top(cx)))
             .on_action(cx.listener(|this, _: &ToBottom, _, cx| this.scroll_to_bottom(cx)))
+            .on_action(cx.listener(|_, _: &Quit, window, _| window.remove_window()))
             .child(
                 div()
                     .id("vmd-scroll")
@@ -409,6 +421,8 @@ fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-u", PageUp, None),
         KeyBinding::new("g g", ToTop, None),
         KeyBinding::new("shift-g", ToBottom, None),
+        KeyBinding::new("q", Quit, None),
+        KeyBinding::new("escape", Quit, None),
     ]);
 }
 
