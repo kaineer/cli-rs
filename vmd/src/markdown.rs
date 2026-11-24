@@ -1,12 +1,12 @@
 //! Разбор markdown в плоский список блоков для отрисовки.
 //!
-//! Подсветки кода нет: блок кода — это моноширинный текст на своём фоне.
+//! Блок кода хранит язык из `` ```lang `` — подсветку делает `highlight`.
 //! Заголовки, списки, цитаты, таблицы и разделители дают разный вид и отступы.
 //!
 //! Внутри текста сохраняется строчная разметка (`**жирный**`, `*курсив*`,
 //! `` `код` ``, `~~зачёркнутый~~`) — она приходит как список спанов.
 
-use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 
 /// Что за блок перед нами — определяет стиль при отрисовке.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,6 +61,8 @@ pub struct Block {
     pub indent: usize,
     /// Для элементов списка: маркер.
     pub marker: Option<String>,
+    /// Язык fenced-блока кода (` ```rust ` → `Some("rust")`).
+    pub language: Option<String>,
 }
 
 impl Block {
@@ -108,6 +110,8 @@ struct State {
     style: InlineStyle,
     /// URL текущей открытой ссылки (вложенные ссылки в MD редки — хватает одного уровня).
     link_url: Option<String>,
+    /// Язык текущего блока кода.
+    code_language: Option<String>,
 }
 
 impl State {
@@ -133,6 +137,7 @@ impl State {
                 spans: Vec::new(),
                 indent: 0,
                 marker: None,
+                language: None,
             }),
             Event::TaskListMarker(done) => {
                 self.push(if done { "[x] " } else { "[ ] " });
@@ -194,10 +199,21 @@ impl State {
                     }
                 }
             }
-            Tag::CodeBlock(_) => {
+            Tag::CodeBlock(kind) => {
                 self.flush_pending();
                 self.in_code = true;
                 self.kind = Some(BlockKind::Code);
+                self.code_language = match kind {
+                    CodeBlockKind::Fenced(lang) => {
+                        let lang = lang.trim();
+                        if lang.is_empty() {
+                            None
+                        } else {
+                            Some(lang.to_string())
+                        }
+                    }
+                    CodeBlockKind::Indented => None,
+                };
             }
             Tag::BlockQuote(_) => {
                 self.flush_pending();
@@ -264,6 +280,7 @@ impl State {
             TagEnd::CodeBlock => {
                 self.in_code = false;
                 self.flush_kind();
+                self.code_language = None;
             }
             TagEnd::BlockQuote(_) => {
                 self.flush_kind();
@@ -301,6 +318,7 @@ impl State {
                         spans,
                         indent: 0,
                         marker: None,
+                        language: None,
                     });
                 }
             }
@@ -323,11 +341,17 @@ impl State {
         if spans.is_empty() && kind != BlockKind::Code {
             return;
         }
+        let language = if kind == BlockKind::Code {
+            self.code_language.take()
+        } else {
+            None
+        };
         self.blocks.push(Block {
             kind,
             spans,
             indent: 0,
             marker: None,
+            language,
         });
     }
 
@@ -351,6 +375,7 @@ impl State {
             spans,
             indent,
             marker: Some(marker),
+            language: None,
         });
     }
 
@@ -426,6 +451,15 @@ mod tests {
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].kind, BlockKind::Code);
         assert_eq!(blocks[0].text(), "let a = 1;\nlet b = 2;");
+        assert_eq!(blocks[0].language, None);
+    }
+
+    #[test]
+    fn code_block_keeps_language() {
+        let blocks = parse("```rust\nfn main() {}\n```\n");
+        assert_eq!(blocks[0].kind, BlockKind::Code);
+        assert_eq!(blocks[0].language.as_deref(), Some("rust"));
+        assert_eq!(blocks[0].text(), "fn main() {}");
     }
 
     #[test]

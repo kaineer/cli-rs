@@ -6,6 +6,13 @@ edition = "2021"
 [dependencies]
 gpui = "0.2.2"
 pulldown-cmark = { version = "0.13", default-features = false }
+# fancy-regex — без системного libonig; two-face даёт Nord и доп. синтаксисы (toml, ts…).
+syntect = { version = "5.3", default-features = false, features = [
+    "plist-load",
+    "yaml-load",
+    "regex-fancy",
+] }
+two-face = { version = "0.5", default-features = false, features = ["syntect-fancy"] }
 
 # `cargo install --path .` игнорирует `Cargo.lock`, поэтому пины продублированы
 # здесь — иначе резолвится libc >= 0.2.187, на котором не собирается

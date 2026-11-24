@@ -1,14 +1,14 @@
 //! vmd — просмотр markdown в окне gpui.
 //!
-//! Заголовки, списки и блоки кода отображаются всегда; подсветки кода нет.
+//! Заголовки, списки и блоки кода (с подсветкой syntect/Nord).
 //! Прокрутка — vim-действиями: `j`/`k`, `gg`, `G`, плюс `d`/`u` и колесо мыши.
 
+mod highlight;
 mod markdown;
 
+use std::ops::Range;
 use std::path::PathBuf;
 use std::process;
-
-use std::ops::Range;
 
 use gpui::{
     actions, div, font, point, prelude::*, px, rgb, AnyElement, App, Application, Bounds, Context,
@@ -277,28 +277,7 @@ impl Viewer {
 
             BlockKind::Paragraph => self.paragraph_block(id.into(), block, indent),
 
-            BlockKind::Code => {
-                // Тот же кегль и цвет, что у inline-кода: `TextRun` не умеет
-                // менять размер, поэтому блок и `code` иначе не совпадут.
-                let styled =
-                    styled_spans(id, block, FontWeight::NORMAL, fg_text(), None, &mono_family());
-                div()
-                    .mt_3()
-                    .mb_3()
-                    .w_full()
-                    .bg(fg_code_bg())
-                    .rounded_md()
-                    .p_4()
-                    .child(
-                        div()
-                            .font_family(mono_family())
-                            .text_size(px(BASE_FONT))
-                            .line_height(px(BASE_FONT * 1.5))
-                            .text_color(fg_text())
-                            .child(styled),
-                    )
-                    .into_any_element()
-            }
+            BlockKind::Code => self.code_block(id, block),
 
             BlockKind::Quote => div()
                 .mt_2()
@@ -440,6 +419,74 @@ impl Viewer {
             .child(styled)
             .into_any_element()
     }
+
+    fn code_block(&self, id: impl Into<ElementId>, block: &Block) -> AnyElement {
+        // Тот же кегль, что у inline-кода: `TextRun` не задаёт размер сам.
+        let styled = highlighted_code(id, block);
+        div()
+            .mt_3()
+            .mb_3()
+            .w_full()
+            .bg(fg_code_bg())
+            .rounded_md()
+            .p_4()
+            .child(
+                div()
+                    .font_family(mono_family())
+                    .text_size(px(BASE_FONT))
+                    .line_height(px(BASE_FONT * 1.5))
+                    .text_color(fg_text())
+                    .child(styled),
+            )
+            .into_any_element()
+    }
+}
+
+/// Блок кода → `InteractiveText` с цветами syntect (тема Nord).
+fn highlighted_code(id: impl Into<ElementId>, block: &Block) -> InteractiveText {
+    let text = block.text();
+    let pieces = highlight::highlight(&text, block.language.as_deref());
+    let family = mono_family();
+    let mut runs: Vec<TextRun> = Vec::with_capacity(pieces.len().max(1));
+
+    if pieces.is_empty() {
+        runs.push(TextRun {
+            len: text.len(),
+            font: font(family.clone()),
+            color: fg_text().into(),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        });
+    } else {
+        for piece in pieces {
+            runs.push(TextRun {
+                len: piece.len,
+                font: Font {
+                    weight: if piece.bold {
+                        FontWeight::BOLD
+                    } else {
+                        FontWeight::NORMAL
+                    },
+                    style: if piece.italic {
+                        FontStyle::Italic
+                    } else {
+                        FontStyle::Normal
+                    },
+                    ..font(family.clone())
+                },
+                color: rgb(piece.color).into(),
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            });
+        }
+    }
+
+    InteractiveText::new(
+        id,
+        StyledText::new(SharedString::from(text)).with_runs(runs),
+    )
 }
 
 impl Render for Viewer {
