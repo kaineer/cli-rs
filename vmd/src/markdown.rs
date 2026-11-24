@@ -39,13 +39,16 @@ pub struct InlineStyle {
 pub struct Span {
     pub text: String,
     pub style: InlineStyle,
+    /// Если спан внутри ссылки — URL назначения (`[текст](url)`).
+    pub url: Option<String>,
 }
 
 impl Span {
-    fn new(text: impl Into<String>, style: InlineStyle) -> Self {
+    fn new(text: impl Into<String>, style: InlineStyle, url: Option<String>) -> Self {
         Self {
             text: text.into(),
             style,
+            url,
         }
     }
 }
@@ -103,6 +106,8 @@ struct State {
     quote_depth: usize,
     /// Текущий строчный стиль.
     style: InlineStyle,
+    /// URL текущей открытой ссылки (вложенные ссылки в MD редки — хватает одного уровня).
+    link_url: Option<String>,
 }
 
 impl State {
@@ -148,14 +153,15 @@ impl State {
             return;
         }
         let text = std::mem::take(&mut self.buf);
-        // Соседние куски с тем же стилем склеиваем.
+        let url = self.link_url.clone();
+        // Соседние куски с тем же стилем и тем же URL склеиваем.
         if let Some(last) = self.spans.last_mut() {
-            if last.style == self.style {
+            if last.style == self.style && last.url == url {
                 last.text.push_str(&text);
                 return;
             }
         }
-        self.spans.push(Span::new(text, self.style));
+        self.spans.push(Span::new(text, self.style, url));
     }
 
     fn start(&mut self, tag: Tag<'_>) {
@@ -226,6 +232,10 @@ impl State {
                 self.flush_spans();
                 self.style.strike = true;
             }
+            Tag::Link { dest_url, .. } => {
+                self.flush_spans();
+                self.link_url = Some(dest_url.into_string());
+            }
             Tag::TableHead | Tag::TableRow => {
                 self.flush_pending();
                 self.spans.clear();
@@ -277,6 +287,10 @@ impl State {
             TagEnd::Strikethrough => {
                 self.flush_spans();
                 self.style.strike = false;
+            }
+            TagEnd::Link => {
+                self.flush_spans();
+                self.link_url = None;
             }
             TagEnd::TableHead | TagEnd::TableRow => {
                 self.flush_spans();
@@ -560,5 +574,46 @@ mod tests {
     fn surrounding_whitespace_is_trimmed() {
         let blocks = parse("  hello  \n");
         assert_eq!(blocks[0].text(), "hello");
+    }
+
+    #[test]
+    fn link_keeps_url_on_span() {
+        let blocks = parse("см. [доку](https://example.com/docs)\n");
+        let link = blocks[0]
+            .spans
+            .iter()
+            .find(|s| s.url.is_some())
+            .expect("нет спана ссылки");
+        assert_eq!(link.text, "доку");
+        assert_eq!(link.url.as_deref(), Some("https://example.com/docs"));
+    }
+
+    #[test]
+    fn link_preserves_inner_styles() {
+        let blocks = parse("[**жирный** код `x`](https://ex.test)\n");
+        let bold = blocks[0]
+            .spans
+            .iter()
+            .find(|s| s.style.bold)
+            .expect("нет жирного");
+        assert_eq!(bold.url.as_deref(), Some("https://ex.test"));
+        let code = blocks[0]
+            .spans
+            .iter()
+            .find(|s| s.style.code)
+            .expect("нет кода");
+        assert_eq!(code.url.as_deref(), Some("https://ex.test"));
+        assert_eq!(code.text, "x");
+    }
+
+    #[test]
+    fn autolink_gets_url() {
+        let blocks = parse("открой <https://example.com>\n");
+        let link = blocks[0]
+            .spans
+            .iter()
+            .find(|s| s.url.is_some())
+            .expect("нет автоссылки");
+        assert_eq!(link.url.as_deref(), Some("https://example.com"));
     }
 }

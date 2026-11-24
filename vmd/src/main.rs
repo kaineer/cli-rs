@@ -8,10 +8,13 @@ mod markdown;
 use std::path::PathBuf;
 use std::process;
 
+use std::ops::Range;
+
 use gpui::{
     actions, div, font, point, prelude::*, px, rgb, AnyElement, App, Application, Bounds, Context,
-    Div, FocusHandle, Font, FontStyle, FontWeight, ScrollHandle, SharedString, StrikethroughStyle,
-    StyledText, TextRun, Window, WindowBounds, WindowOptions,
+    Div, ElementId, FocusHandle, Font, FontStyle, FontWeight, InteractiveText, ScrollHandle,
+    SharedString, StrikethroughStyle, StyledText, TextRun, UnderlineStyle, Window, WindowBounds,
+    WindowOptions,
 };
 
 use markdown::{Block, BlockKind, InlineStyle};
@@ -43,6 +46,9 @@ fn fg_quote() -> gpui::Rgba {
 }
 fn fg_rule() -> gpui::Rgba {
     rgb(0x4c566a)
+}
+fn fg_link() -> gpui::Rgba {
+    rgb(0x81a1c1)
 }
 
 // ---- Параметры вида ----
@@ -93,16 +99,18 @@ fn span_font(style: InlineStyle, weight: FontWeight, base: &SharedString) -> Fon
     }
 }
 
-/// Собирает `StyledText` из спанов: жирный, курсив, inline-код, зачёркивание.
+/// Собирает кликабельный текст из спанов: жирный, курсив, код, ссылки, зачёркивание.
 fn styled_spans(
+    id: impl Into<ElementId>,
     block: &Block,
     weight: FontWeight,
     color: gpui::Rgba,
     code_background: Option<gpui::Rgba>,
     base_family: &SharedString,
-) -> StyledText {
+) -> InteractiveText {
     let mut out = String::new();
     let mut runs: Vec<TextRun> = Vec::with_capacity(block.spans.len());
+    let mut link_ranges: Vec<(Range<usize>, String)> = Vec::new();
 
     for span in &block.spans {
         let font = span_font(span.style, weight, base_family);
@@ -113,10 +121,13 @@ fn styled_spans(
         } else {
             span.text.clone()
         };
+        let start = out.len();
+        let is_link = span.url.is_some();
+        let run_color = if is_link { fg_link() } else { color };
         let mut run = TextRun {
             len: text.len(),
             font,
-            color: color.into(),
+            color: run_color.into(),
             background_color: None,
             underline: None,
             strikethrough: None,
@@ -124,17 +135,45 @@ fn styled_spans(
         if span.style.code {
             run.background_color = code_background.map(Into::into);
         }
+        if is_link {
+            run.underline = Some(UnderlineStyle {
+                thickness: px(1.),
+                color: Some(fg_link().into()),
+                wavy: false,
+            });
+        }
         if span.style.strike {
             run.strikethrough = Some(StrikethroughStyle {
                 thickness: px(1.),
-                color: Some(color.into()),
+                color: Some(run_color.into()),
             });
         }
         runs.push(run);
         out.push_str(&text);
+        let end = out.len();
+
+        if let Some(url) = &span.url {
+            if let Some((range, prev)) = link_ranges.last_mut() {
+                if prev == url && range.end == start {
+                    range.end = end;
+                    continue;
+                }
+            }
+            link_ranges.push((start..end, url.clone()));
+        }
     }
 
-    StyledText::new(SharedString::from(out)).with_runs(runs)
+    let ranges: Vec<Range<usize>> = link_ranges.iter().map(|(r, _)| r.clone()).collect();
+    let urls: Vec<String> = link_ranges.into_iter().map(|(_, u)| u).collect();
+
+    InteractiveText::new(id, StyledText::new(SharedString::from(out)).with_runs(runs)).on_click(
+        ranges,
+        move |ix, _window, cx| {
+            if let Some(url) = urls.get(ix) {
+                cx.open_url(url);
+            }
+        },
+    )
 }
 
 struct Viewer {
@@ -199,23 +238,31 @@ impl Viewer {
 
     fn render_blocks(&self) -> Div {
         let mut column = div().flex().flex_col().w_full();
-        for block in &self.blocks {
-            column = column.child(self.render_block(block));
+        for (i, block) in self.blocks.iter().enumerate() {
+            column = column.child(self.render_block(i, block));
         }
         column
     }
 
-    fn render_block(&self, block: &Block) -> AnyElement {
+    fn render_block(&self, index: usize, block: &Block) -> AnyElement {
         let indent = px(block.indent as f32 * INDENT_STEP);
+        let id = ("md", index);
 
         match block.kind {
-            BlockKind::H1 => self.heading_block(block, 32.0, 18.0),
-            BlockKind::H2 => self.heading_block(block, 26.0, 15.0),
-            BlockKind::H3 => self.heading_block(block, 21.0, 12.0),
-            BlockKind::H4 => self.heading_block(block, 18.5, 10.0),
-            BlockKind::H5 => self.heading_block(block, 16.5, 8.0),
+            BlockKind::H1 => self.heading_block(id.into(), block, 32.0, 18.0),
+            BlockKind::H2 => self.heading_block(id.into(), block, 26.0, 15.0),
+            BlockKind::H3 => self.heading_block(id.into(), block, 21.0, 12.0),
+            BlockKind::H4 => self.heading_block(id.into(), block, 18.5, 10.0),
+            BlockKind::H5 => self.heading_block(id.into(), block, 16.5, 8.0),
             BlockKind::H6 => {
-                let styled = styled_spans(block, FontWeight::BOLD, fg_muted(), Some(fg_code_bg()), &self.ui_family);
+                let styled = styled_spans(
+                    id,
+                    block,
+                    FontWeight::BOLD,
+                    fg_muted(),
+                    Some(fg_code_bg()),
+                    &self.ui_family,
+                );
                 div()
                     .mt(px(8.))
                     .mb_2()
@@ -228,13 +275,13 @@ impl Viewer {
                     .into_any_element()
             }
 
-            BlockKind::Paragraph => self.paragraph_block(block, indent),
+            BlockKind::Paragraph => self.paragraph_block(id.into(), block, indent),
 
             BlockKind::Code => {
                 // Тот же кегль и цвет, что у inline-кода: `TextRun` не умеет
                 // менять размер, поэтому блок и `code` иначе не совпадут.
                 let styled =
-                    styled_spans(block, FontWeight::NORMAL, fg_text(), None, &mono_family());
+                    styled_spans(id, block, FontWeight::NORMAL, fg_text(), None, &mono_family());
                 div()
                     .mt_3()
                     .mb_3()
@@ -266,6 +313,7 @@ impl Viewer {
                         .line_height(px(24.0))
                         .text_color(fg_muted())
                         .child(styled_spans(
+                            id,
                             block,
                             FontWeight::NORMAL,
                             fg_muted(),
@@ -300,6 +348,7 @@ impl Viewer {
                         .line_height(px(24.0))
                         .text_color(fg_text())
                         .child(styled_spans(
+                            id,
                             block,
                             FontWeight::NORMAL,
                             fg_text(),
@@ -320,6 +369,7 @@ impl Viewer {
                         .text_size(px(13.5))
                         .text_color(fg_text())
                         .child(styled_spans(
+                            id,
                             block,
                             FontWeight::NORMAL,
                             fg_text(),
@@ -338,8 +388,21 @@ impl Viewer {
         }
     }
 
-    fn heading_block(&self, block: &Block, size: f32, margin_top: f32) -> AnyElement {
-        let styled = styled_spans(block, FontWeight::BOLD, fg_heading(), Some(fg_code_bg()), &self.ui_family);
+    fn heading_block(
+        &self,
+        id: ElementId,
+        block: &Block,
+        size: f32,
+        margin_top: f32,
+    ) -> AnyElement {
+        let styled = styled_spans(
+            id,
+            block,
+            FontWeight::BOLD,
+            fg_heading(),
+            Some(fg_code_bg()),
+            &self.ui_family,
+        );
         div()
             .mt(px(margin_top))
             .mb_2()
@@ -352,8 +415,20 @@ impl Viewer {
             .into_any_element()
     }
 
-    fn paragraph_block(&self, block: &Block, indent: gpui::Pixels) -> AnyElement {
-        let styled = styled_spans(block, FontWeight::NORMAL, fg_text(), Some(fg_code_bg()), &self.ui_family);
+    fn paragraph_block(
+        &self,
+        id: ElementId,
+        block: &Block,
+        indent: gpui::Pixels,
+    ) -> AnyElement {
+        let styled = styled_spans(
+            id,
+            block,
+            FontWeight::NORMAL,
+            fg_text(),
+            Some(fg_code_bg()),
+            &self.ui_family,
+        );
         div()
             .mt_2()
             .mb_2()
