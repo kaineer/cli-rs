@@ -10,3 +10,4 @@ rust rewrite for some handy tools
  * `rx` -- menu handler
  * `smartlist` -- tui to select from command output
  * `vmd` -- markdown viewer
+ * `ytl` -- youtube audio via ytdl + TUI library player
